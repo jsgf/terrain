@@ -63,6 +63,7 @@
  */
 
 #define PATCH_SAMPLES	16	/* N */
+#define VERTICES_PER_PATCH	((PATCH_SAMPLES + 1) * (PATCH_SAMPLES + 1))
 
 typedef short elevation_t;	/* basic sample type of a heightfield */
 
@@ -197,9 +198,12 @@ struct quadtree {
 	struct patch *freelist;
 
 	struct patch *patches;
+
+	unsigned int vtxbufid;
 };
 
 
 struct quadtree *quadtree_create(int num_patches, int radius);
+void quadtree_update_view(struct quadtree *qt, const float view[16]);
 
 #endif	/* QUADTREE_H */

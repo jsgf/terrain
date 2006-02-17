@@ -4,6 +4,10 @@
 #include <string.h>
 #include <stdio.h>
 
+#define GL_GLEXT_PROTOTYPES
+#include <GL/gl.h>
+#include <GL/glext.h>
+
 #include "quadtree.h"
 
 /* ID management.  The ID is an integer which uniquely identifies all
@@ -163,24 +167,28 @@ static const struct {
    with <= level, both neighbour pointers should point to it.  */
 static int check_neighbour_levels(const struct patch *p)
 {
-	for(enum patch_neighbour dir = 0; dir < dir; dir++) {
+	for(enum patch_neighbour dir = 0; dir < 8; dir++) {
 		const struct patch *n = p->neigh[dir];
 
-		if (n == NULL)
+		if (n == NULL) {
 			goto fail;
-		if (abs(n->level - p->level) > 1)
+		}
+
+		if (abs(n->level - p->level) > 1) {
+			printf("p->level=%d n(%d)->level=%d\n",
+			       p->level, dir, n->level);
 			goto fail;
+		}
 
 		if (p->level >= n->level) {
-			if (p->neigh[dir] != p->neigh[dir ^ 1])
+			if (p->neigh[dir] != p->neigh[dir ^ 1]) {
 				goto fail;
+			}
 		} else {
-			if (is_updown(dir)) {
-				if (p->neigh[dir & ~1]->neigh[PN_RIGHT] != p->neigh[dir | 1])
-					goto fail;
-			} else {
-				if (p->neigh[dir & ~1]->neigh[PN_UP] != p->neigh[dir | 1])
-					goto fail;
+			if (p->neigh[dir] == p->neigh[dir ^ 1]) {
+				printf("p->level=%d n(%d)->level=%d\n",
+				       p->level, dir, n->level);
+				goto fail;
 			}
 		}
 	}
@@ -461,12 +469,14 @@ static struct patch *patch_merge(struct quadtree *qt, struct patch *p)
 			assert(p->neigh[pn->ud]->level == p->level+1);
 			patch_merge(qt, p->neigh[pn->ud]);
 		}
+		assert(p->neigh[pn->ud]->level <= p->level);
 		assert(p->neigh[pn->ud] == p->neigh[pn->ud+1]);
 
 		if (p->neigh[pn->lr]->level > p->level) {
 			assert(p->neigh[pn->lr]->level == p->level+1);
 			patch_merge(qt, p->neigh[pn->lr]);
 		}
+		assert(p->neigh[pn->lr]->level <= p->level);
 		assert(p->neigh[pn->lr] == p->neigh[pn->lr+1]);
 
 
@@ -497,17 +507,19 @@ static struct patch *patch_merge(struct quadtree *qt, struct patch *p)
 	   from its kids.  */
 	for(int i = 0; i < 4; i++) {
 		const struct neighbours *pn = &neighbours[i];
+		int sx = siblings[i].sx;
+		int sy = siblings[i].sy;
 
 		assert(sib[i]->neigh[pn->lr] == sib[i]->neigh[pn->lr+1]);
-		parent->neigh[pn->lr  ] = sib[i]->neigh[pn->lr];
-		parent->neigh[pn->lr+1] = sib[i]->neigh[pn->lr];
+		parent->neigh[pn->lr+sy] = sib[i]->neigh[pn->lr];
 
 		assert(sib[i]->neigh[pn->ud] == sib[i]->neigh[pn->ud+1]);
-		parent->neigh[pn->ud  ] = sib[i]->neigh[pn->ud];
-		parent->neigh[pn->ud+1] = sib[i]->neigh[pn->ud];
-
-		backlink_neighbours(parent, sib[i]);
+		parent->neigh[pn->ud+sx] = sib[i]->neigh[pn->ud];
 	}
+
+	/* now that the forward-links are set up, do the backlinks */
+	for(int i = 0; i < 4; i++)
+		backlink_neighbours(parent, sib[i]);
 
 	/* free all the siblings */
 	for(int i = 0; i < 4; i++) {
@@ -671,28 +683,21 @@ struct quadtree *quadtree_create(int num_patches, int radius)
 	if (qt->patches == NULL)
 		goto out;
 
+	glGenBuffersARB(1, &qt->vtxbufid);
+	glBindBufferARB(GL_ARRAY_BUFFER_BINDING, qt->vtxbufid);
+	glBufferDataARB(GL_ARRAY_BUFFER_BINDING,
+			sizeof(struct vertex) * VERTICES_PER_PATCH * num_patches,
+			NULL, GL_DYNAMIC_DRAW_ARB);
+	glBindBufferARB(GL_ARRAY_BUFFER_BINDING, 0);
+
 	/* add patches to freelist */
 	for(int i = 0; i < num_patches; i++) {
 		struct patch *p = &qt->patches[i];
 
 		p->level = -1; /* mark as never used */
+		p->vertex_offset = i * VERTICES_PER_PATCH;
 
 		patch_free(qt, p);
-	}
-	printf("\n");
-
-	/* create basis patches in cube form */
-	struct patch *basis[6];
-	for(int i = 0; i < 6; i++) {
-		struct patch *p = patch_alloc(qt);
-
-		if (p == NULL)
-			goto out;
-
-		basis[i] = p;
-		patch_init(p, 0, i);
-
-		patch_insert_active(qt, p);
 	}
 
 	/* 
@@ -725,90 +730,52 @@ struct quadtree *quadtree_create(int num_patches, int radius)
 
 
 	 */
+	static const struct cube {
+		int x0, x1, y0, y1, z0, z1;
+		int neigh[4]; /* right, up, left, down */
+	} cube[6] = {
+		{  1, -1,  -1,  1,  -1, -1,  { 4, 1, 5, 3 } }, /* 0 */
+		{  1, -1,   1,  1,  -1,  1,  { 4, 2, 5, 0 } }, /* 1 */
+		{  1, -1,   1, -1,   1,  1,  { 4, 3, 5, 1 } }, /* 2 */
+		{ -1,  1,  -1, -1,  -1,  1,  { 5, 2, 4, 0 } }, /* 3 */
+		{ -1, -1,   1, -1,  -1,  1,  { 3, 2, 1, 0 } }, /* 4 */
+		{  1,  1,  -1,  1,  -1,  1,  { 1, 2, 3, 0 } }, /* 5 */
+	};
 
-	basis[0]->x0 =  radius; basis[0]->x1 = -radius;
-	basis[0]->y0 = -radius; basis[0]->y1 =  radius;
-	basis[0]->z0 = -radius; basis[0]->z1 = -radius;
+	/* create basis patches in cube form */
+	struct patch *basis[6];
+	for(int i = 0; i < 6; i++) {
+		struct patch *p = patch_alloc(qt);
 
-	basis[0]->neigh[PN_RIGHT+0] = basis[4];
-	basis[0]->neigh[PN_RIGHT+1] = basis[4];
-	basis[0]->neigh[PN_UP+0]    = basis[1];
-	basis[0]->neigh[PN_UP+1]    = basis[1];
-	basis[0]->neigh[PN_LEFT+0]  = basis[5];
-	basis[0]->neigh[PN_LEFT+1]  = basis[5];
-	basis[0]->neigh[PN_DOWN+0]  = basis[3];
-	basis[0]->neigh[PN_DOWN+1]  = basis[3];
+		if (p == NULL)
+			goto out;
 
+		basis[i] = p;
+		patch_init(p, 0, i);
+	}
 
-	basis[1]->x0 =  radius; basis[1]->x1 = -radius;
-	basis[1]->y0 =  radius; basis[1]->y1 =  radius;
-	basis[1]->z0 = -radius; basis[1]->z1 =  radius;
+	for(int i = 0; i < 6; i++) {
+		struct patch *b = basis[i];
+		const struct cube *c = &cube[i];
 
-	basis[1]->neigh[PN_RIGHT+0] = basis[4];
-	basis[1]->neigh[PN_RIGHT+1] = basis[4];
-	basis[1]->neigh[PN_UP+0]    = basis[2];
-	basis[1]->neigh[PN_UP+1]    = basis[2];
-	basis[1]->neigh[PN_LEFT+0]  = basis[5];
-	basis[1]->neigh[PN_LEFT+1]  = basis[5];
-	basis[1]->neigh[PN_DOWN+0]  = basis[0];
-	basis[1]->neigh[PN_DOWN+1]  = basis[0];
+		b->x0 = c->x0 * radius;
+		b->x1 = c->x1 * radius;
 
+		b->y0 = c->y0 * radius;
+		b->y1 = c->y1 * radius;
 
-	basis[2]->x0 =  radius; basis[2]->x1 = -radius;
-	basis[2]->y0 =  radius; basis[2]->y1 = -radius;
-	basis[2]->z0 =  radius; basis[2]->z1 =  radius;
+		b->z0 = c->z0 * radius;
+		b->z1 = c->z1 * radius;
 
-	basis[2]->neigh[PN_RIGHT+0] = basis[4];
-	basis[2]->neigh[PN_RIGHT+1] = basis[4];
-	basis[2]->neigh[PN_UP+0]    = basis[3];
-	basis[2]->neigh[PN_UP+1]    = basis[3];
-	basis[2]->neigh[PN_LEFT+0]  = basis[5];
-	basis[2]->neigh[PN_LEFT+1]  = basis[5];
-	basis[2]->neigh[PN_DOWN+0]  = basis[1];
-	basis[2]->neigh[PN_DOWN+1]  = basis[1];
+		for(int j = 0; j < 4; j++) {
+			b->neigh[j * 2 + 0] = basis[c->neigh[j]];
+			b->neigh[j * 2 + 1] = basis[c->neigh[j]];
+		}
 
+		patch_insert_active(qt, b);
+	}
 
-	basis[3]->x0 = -radius; basis[3]->x1 =  radius;
-	basis[3]->y0 = -radius; basis[3]->y1 = -radius;
-	basis[3]->z0 = -radius; basis[3]->z1 =  radius;
-
-	basis[3]->neigh[PN_RIGHT+0] = basis[5];
-	basis[3]->neigh[PN_RIGHT+1] = basis[5];
-	basis[3]->neigh[PN_UP+0]    = basis[2];
-	basis[3]->neigh[PN_UP+1]    = basis[2];
-	basis[3]->neigh[PN_LEFT+0]  = basis[4];
-	basis[3]->neigh[PN_LEFT+1]  = basis[4];
-	basis[3]->neigh[PN_DOWN+0]  = basis[0];
-	basis[3]->neigh[PN_DOWN+1]  = basis[0];
-
-
-	basis[4]->x0 = -radius; basis[4]->x1 = -radius;
-	basis[4]->y0 =  radius; basis[4]->y1 = -radius;
-	basis[4]->z0 = -radius; basis[4]->z1 =  radius;
-
-	basis[4]->neigh[PN_RIGHT+0] = basis[3];
-	basis[4]->neigh[PN_RIGHT+1] = basis[3];
-	basis[4]->neigh[PN_UP+0]    = basis[2];
-	basis[4]->neigh[PN_UP+1]    = basis[2];
-	basis[4]->neigh[PN_LEFT+0]  = basis[1];
-	basis[4]->neigh[PN_LEFT+1]  = basis[1];
-	basis[4]->neigh[PN_DOWN+0]  = basis[0];
-	basis[4]->neigh[PN_DOWN+1]  = basis[0];
-
-
-	basis[5]->x0 =  radius; basis[5]->x1 =  radius;
-	basis[5]->y0 = -radius; basis[5]->y1 =  radius;
-	basis[5]->z0 = -radius; basis[5]->z1 =  radius;
-
-	basis[5]->neigh[PN_RIGHT+0] = basis[1];
-	basis[5]->neigh[PN_RIGHT+1] = basis[1];
-	basis[5]->neigh[PN_UP+0]    = basis[2];
-	basis[5]->neigh[PN_UP+1]    = basis[2];
-	basis[5]->neigh[PN_LEFT+0]  = basis[3];
-	basis[5]->neigh[PN_LEFT+1]  = basis[3];
-	basis[5]->neigh[PN_DOWN+0]  = basis[0];
-	basis[5]->neigh[PN_DOWN+1]  = basis[0];
-
+#if 1
 	emitdot(qt, "base.dot");
 	//patch_split(qt, basis[0]);
 	patch_split(qt, basis[1]);
@@ -826,6 +793,11 @@ struct quadtree *quadtree_create(int num_patches, int radius)
 	patch_split(qt, basis[1]->kids[2]->kids[1]->kids[1]);
 	emitdot(qt, "split1-2-1-1.dot");
 
+	patch_split(qt, basis[1]->kids[2]->kids[1]->kids[1]->kids[0]);
+	emitdot(qt, "split1-2-1-1-0.dot");
+#endif
+
+#if 0
 	patch_merge(qt, basis[1]->kids[2]->kids[0]);
 	emitdot(qt, "merge1-2-0.dot");
 
@@ -833,10 +805,20 @@ struct quadtree *quadtree_create(int num_patches, int radius)
 	emitdot(qt, "merge0-1.dot");
 	patch_merge(qt, basis[0]);
 	emitdot(qt, "merge0.dot");
+	patch_merge(qt, basis[4]->kids[1]);
+	emitdot(qt, "merge4-1.dot");
+	patch_merge(qt, basis[1]->kids[1]);
+	emitdot(qt, "merge1-1.dot");
+#endif
 
 	return qt;
 
   out: 
 	free(qt);
 	return NULL;
+}
+
+void quadtree_update_view(struct quadtree *qt, const float view[16])
+{
+	
 }
