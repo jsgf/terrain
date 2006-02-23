@@ -117,6 +117,68 @@ static void project_to_sphere(int radius, int x, int y, int z)
 		   zf * radius / len);
 }
 
+static void draw_patch(const struct patch *p, int culled)
+{
+	if (culled) 
+		glColor3f(.4,.4,.4);
+	else
+		glColor4ub(p->col[0], p->col[1], p->col[2], .7*255);
+
+	if (0)
+		printf("p=%p id=%lu x=(%d,%d) y=(%d,%d), z=(%d,%d)\n",
+		       p, p->id, p->x0, p->x1, p->y0, p->y1, p->z0, p->z1);
+
+#if 1
+	GLuint texid = (p->id+1) + (1 << (p->level * 2 + 4));
+
+	if (!glIsTexture(texid)) {
+		const char *s = id2str(p);
+		if (0)
+			printf("generating tex %u for p=%p %d:%lu %s\n",
+			       texid, p, p->level,p->id, s);
+
+		glBindTexture(GL_TEXTURE_2D, texid);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+		texprintf("%s", s);
+	} else
+		glBindTexture(GL_TEXTURE_2D, texid);
+#else
+	printf("generating tex for p=%p %lu %s\n",
+	       p, p->id, id2str(p));
+	texprintf("%s", id2str(p));
+#endif
+
+	glBegin(GL_QUADS);
+
+	if (p->z0 == p->z1 || /* top, bottom */
+	    p->y0 == p->y1) { /* front, back */
+		glTexCoord2f(0,1);
+		project_to_sphere(RADIUS, p->x0, p->y0, p->z0);
+		glTexCoord2f(1,1);
+		project_to_sphere(RADIUS, p->x1, p->y0, p->z0);
+		glTexCoord2f(1,0);
+		project_to_sphere(RADIUS, p->x1, p->y1, p->z1);
+		glTexCoord2f(0,0);
+		project_to_sphere(RADIUS, p->x0, p->y1, p->z1);
+	} else if (p->x0 == p->x1) { /* left, right */
+		glTexCoord2f(0,1);
+		project_to_sphere(RADIUS, p->x0, p->y0, p->z0);
+		glTexCoord2f(1,1);
+		project_to_sphere(RADIUS, p->x0, p->y1, p->z0);
+		glTexCoord2f(1,0);
+		project_to_sphere(RADIUS, p->x0, p->y1, p->z1);
+		glTexCoord2f(0,0);
+		project_to_sphere(RADIUS, p->x0, p->y0, p->z1);
+	}
+	glEnd();
+
+	GLERROR();
+}
+
 static void draw()
 {
 	static const float cols[] = {
@@ -128,7 +190,6 @@ static void draw()
 		1,0,1,.3,
 		1,1,1,.3,
 	};
-	int f;
 
 	glBegin(GL_LINES);
 	  glColor3f(1,0,0);
@@ -147,79 +208,32 @@ static void draw()
 	  glVertex3i(0, 0,  2000);
 	glEnd();
 
-	f = 0;
-	for(int i = 0; i < PRIO_BUCKETS; i++) {
-		struct patch *head = qt->active[i];
+	glDisable(GL_DEPTH_TEST);
+	glDisable(GL_CULL_FACE);
+	glDisable(GL_BLEND);
+	GLERROR();
 
-		if (head) {
-			struct patch *p = head;
+	struct list_head *pp;
+	list_for_each(pp, &qt->culled) {
+		struct patch *p = list_entry(pp, struct patch, list);
 
-			do {
-				glColor4fv(&cols[(f % 7)*4]);
+		draw_patch(p, 1);
+	}
 
-				if (0)
-					printf("%d: p=%p id=%lu x=(%d,%d) y=(%d,%d), z=(%d,%d)\n",
-					       f, p, p->id, p->x0, p->x1, p->y0, p->y1, p->z0, p->z1);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-#if 1
-				GLuint texid = (p->id+1) + (1 << (p->level * 2 + 4));
+	GLERROR();
+	list_for_each(pp, &qt->visible) {
+		struct patch *p = list_entry(pp, struct patch, list);
 
-				if (!glIsTexture(texid)) {
-					const char *s = id2str(p);
-					if (0)
-						printf("generating tex %u for p=%p %d:%lu %s\n",
-						       texid, p, p->level,p->id, s);
-
-					glBindTexture(GL_TEXTURE_2D, texid);
-					glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-					glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-					glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-					glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-					texprintf("%s", s);
-				} else
-					glBindTexture(GL_TEXTURE_2D, texid);
-#else
-				printf("generating tex for p=%p %lu %s\n",
-				       p, p->id, id2str(p));
-				texprintf("%s", id2str(p));
-#endif
-
-				glBegin(GL_QUADS);
-
-				if (p->z0 == p->z1 || /* top, bottom */
-				    p->y0 == p->y1) { /* front, back */
-					glTexCoord2f(0,1);
-					project_to_sphere(RADIUS, p->x0, p->y0, p->z0);
-					glTexCoord2f(1,1);
-					project_to_sphere(RADIUS, p->x1, p->y0, p->z0);
-					glTexCoord2f(1,0);
-					project_to_sphere(RADIUS, p->x1, p->y1, p->z1);
-					glTexCoord2f(0,0);
-					project_to_sphere(RADIUS, p->x0, p->y1, p->z1);
-				} else if (p->x0 == p->x1) { /* left, right */
-					glTexCoord2f(0,1);
-					project_to_sphere(RADIUS, p->x0, p->y0, p->z0);
-					glTexCoord2f(1,1);
-					project_to_sphere(RADIUS, p->x0, p->y1, p->z0);
-					glTexCoord2f(1,0);
-					project_to_sphere(RADIUS, p->x0, p->y1, p->z1);
-					glTexCoord2f(0,0);
-					project_to_sphere(RADIUS, p->x0, p->y0, p->z1);
-				}
-				glEnd();
-
-				GLERROR();
-
-				p = p->next;
-				f++;
-			} while(p != head);
-		}
+		draw_patch(p, 0);
 	}
 }
 
 static float delta = 1;
 
+static float dolly = -2500;
 static void display()
 {
 	static float angle;
@@ -230,20 +244,28 @@ static void display()
 	glMatrixMode(GL_MODELVIEW);
 	glLoadIdentity();
 	//gluLookAt(500,-3000,1100, 0,0,0, 0,0,1);
-	glTranslatef(0, 0, -2500);
-	glRotatef(bearing, 0, 1, 0);
+	glTranslatef(0, 0, dolly);
 	glRotatef(elevation, 1, 0, 0);
+	glRotatef(bearing, 0, 1, 0);
 	//glRotatef(angle, 0, 1, 1);
 	angle += delta;
 	GLERROR();
 
-	if (0) {
-		glEnable(GL_DEPTH_TEST);
-		//glPolygonMode(GL_FRONT, GL_LINE);
-	} else
-		glEnable(GL_BLEND);
-	glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-	GLERROR();
+
+	{
+		GLfloat mv[16], proj[16];
+		GLint viewport[4];
+
+		glGetFloatv(GL_MODELVIEW_MATRIX, mv);
+		GLERROR();
+		glGetFloatv(GL_PROJECTION_MATRIX, proj);
+		GLERROR();
+		glGetIntegerv(GL_VIEWPORT, viewport);
+		GLERROR();
+
+		quadtree_update_view(qt, mv, proj, viewport);
+	}
+
 
 	glEnable(GL_TEXTURE_2D);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -255,7 +277,6 @@ static void display()
 	GLERROR();
 
 	draw();
-	GLERROR();
 
 	glutSwapBuffers();
 
@@ -285,15 +306,42 @@ static void keyup(unsigned char key, int x, int y)
 	}
 }
 
+static int drag = 0, spin = 0;
+static int lasty = 0;
+
 static void motion(int x, int y)
 {
-	elevation = y * 360 / height;
-	bearing = x * 360 / width;
+	if (drag) {
+		dolly += y - lasty;
+		if (dolly > -RADIUS)
+			dolly = -RADIUS * 1.01;
+
+		printf("dolly = %g\n", dolly);
+		lasty = y;
+	} else if (spin) {
+		elevation = y * 360 / height;
+		bearing = x * 360 / width;
+	}
+}
+
+static void mouse(int buttons, int state, int x, int y)
+{
+	if (state != GLUT_DOWN) {
+		spin = drag = 0;
+		return;
+	}
+
+	if (buttons == GLUT_LEFT_BUTTON)
+		spin = 1;
+	else if (buttons == GLUT_MIDDLE_BUTTON) {
+		lasty = y;
+		drag = 1;
+	}
 }
 
 int main(int argc, char **argv)
 {
-	qt = quadtree_create(400, RADIUS);
+	qt = quadtree_create(200, RADIUS, NULL);
 	
 	glutInit(&argc, argv);
         glutInitDisplayMode(GLUT_RGB | GLUT_DOUBLE | GLUT_DEPTH);
@@ -305,7 +353,9 @@ int main(int argc, char **argv)
 	glutKeyboardUpFunc(keyup);
 	glutReshapeFunc(reshape);
 	glutDisplayFunc(display);
-	glutPassiveMotionFunc(motion);
+	//glutPassiveMotionFunc(motion);
+	glutMotionFunc(motion);
+	glutMouseFunc(mouse);
 
 	glutMainLoop();
 }

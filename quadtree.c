@@ -3,12 +3,25 @@
 #include <assert.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 
 #define GL_GLEXT_PROTOTYPES
 #include <GL/gl.h>
 #include <GL/glext.h>
+#include <GL/glu.h>
 
 #include "quadtree.h"
+
+static struct patch *patch_merge(struct quadtree *qt, struct patch *p);
+
+static inline int clamp(int x, int lower, int upper)
+{
+	if (x > upper)
+		x = upper;
+	if (x < lower)
+		x = lower;
+	return x;
+}
 
 /* ID management.  The ID is an integer which uniquely identifies all
    nodes in the quadtree.  It uses 2 bits per level. */
@@ -32,60 +45,64 @@ static const char *id2str(const struct patch *p)
 	return buf;
 }
 
+static void emitdotpatch(FILE *f, const struct patch *p)
+{
+	static const char *dirname[] = {
+#define DN(x)	[PN_##x] = #x, [PN_##x##_1] = #x "_1"
+		DN(RIGHT),
+		DN(LEFT),
+		DN(UP),
+		DN(DOWN)
+#undef DN
+	};
+
+	fprintf(f, "\t\"%p\" [label=\"%s\", shape=%s];\n",
+		p, id2str(p), (p->flags & PF_CULLED) ? "box" : "diamond");
+		
+	for(enum patch_neighbour d = 0; d < 8; d += 2) {
+		if (p->neigh[d] == p->neigh[d+1]) {
+			fprintf(f, "\t\t\"%p\" -> \"%p\" [label=\"%s+\"];\n", 
+				p, p->neigh[d], dirname[d]);
+		} else {
+			fprintf(f, "\t\t\"%p\" -> \"%p\" [label=\"%s\"];\n", 
+				p, p->neigh[d], dirname[d]);
+			fprintf(f, "\t\t\"%p\" -> \"%p\" [label=\"%s\"];\n", 
+				p, p->neigh[d+1], dirname[d+1]);
+		}
+	}
+
+}
+
 void emitdot(struct quadtree *qt, const char *name)
 {
 	FILE *f = fopen(name, "w");
 
 	fprintf(f, "digraph \"%s\" {\n", name);
 
-	for(int i = 0; i < PRIO_BUCKETS; i++) {
-		struct patch *head = qt->active[i];
+	struct list_head *pp;
 
-		if (head) {
-			struct patch *p = head;
+	list_for_each(pp, &qt->visible) {
+		struct patch *p = list_entry(pp, struct patch, list);
 
-			do {
-				static const char *dirname[] = {
-#define DN(x)	[PN_##x] = #x, [PN_##x##_1] = #x "_1"
-					DN(RIGHT),
-					DN(LEFT),
-					DN(UP),
-					DN(DOWN)
-#undef DN
-				};
+		emitdotpatch(f, p);
+	}
+	list_for_each(pp, &qt->culled) {
+		struct patch *p = list_entry(pp, struct patch, list);
 
-				fprintf(f, "\t\"%p\" [label=\"%s\", shape=box];\n",
-				       p, id2str(p));
-		
-				for(enum patch_neighbour d = 0; d < 8; d += 2) {
-					if (p->neigh[d] == p->neigh[d+1]) {
-						fprintf(f, "\t\t\"%p\" -> \"%p\" [label=\"%s+\"];\n", 
-							p, p->neigh[d], dirname[d]);
-					} else {
-						fprintf(f, "\t\t\"%p\" -> \"%p\" [label=\"%s\"];\n", 
-							p, p->neigh[d], dirname[d]);
-						fprintf(f, "\t\t\"%p\" -> \"%p\" [label=\"%s\"];\n", 
-							p, p->neigh[d+1], dirname[d+1]);
-					}
-				}
-
-				p = p->next;
-			} while(p != head);
-		}
+		emitdotpatch(f, p);
 	}
 	fprintf(f, "}\n");
 }
 
 static int on_freelist(const struct quadtree *qt, const struct patch *p)
 {
+	struct list_head *pp;
 
-	if (qt->freelist) {
-		const struct patch *pp = qt->freelist;
-		do {
-			if (pp == p)
-				return 1;
-			pp = pp->next;
-		} while(pp != qt->freelist);
+	list_for_each(pp, &qt->freelist) {
+		const struct patch *fp = list_entry(pp, struct patch, list);
+
+		if (fp == p)
+			return 1;
 	}
 	return 0;
 }
@@ -128,11 +145,13 @@ static inline int are_siblings(const struct patch *p1, const struct patch *p2)
 		parentid(p1, 1) == parentid(p2, 1);
 }
 
+#if 0
 static int is_updown(enum patch_neighbour n)
 {
 	n &= ~1;
 	return n == PN_UP || n == PN_DOWN;
 }
+#endif
 
 static int is_leftright(enum patch_neighbour n)
 {
@@ -268,75 +287,109 @@ static void link_neighbours_from_parent(struct patch *p)
 	assert(check_neighbour_levels(p));
 }
 
-static void patch_insert_tail(struct patch **headp, struct patch *p)
-{
-	if (*headp == NULL) {
-		p->prev = p;
-		p->next = p;
-		*headp = p;
-	} else {
-		p->next = *headp;
-		p->prev = (*headp)->prev;
-		p->prev->next = p;
-		p->next->prev = p;
-	}
-}
-
-static void patch_insert_head(struct patch **headp, struct patch *p)
-{
-	patch_insert_tail(headp, p);
-	*headp = p;
-}
-
-static void patch_remove(struct patch **headp, struct patch *p)
-{
-	if (*headp == p) {
-		if (p->next == p)
-			*headp = NULL;
-		else
-			*headp = p->next;
-	}
-
-	p->next->prev = p->prev;
-	p->prev->next = p->next;
-}
-
-static struct patch *patch_remove_head(struct patch **headp)
-{
-	struct patch *p = NULL;
-
-	if (*headp != NULL) {
-		p = *headp;
-		patch_remove(headp, p);
-	}
-
-	return p;
-}
-
 static void patch_insert_active(struct quadtree *qt, struct patch *p)
 {
-	int queue = p->priority / PRIO_BUCKETS;
+	assert((p->flags & PF_ACTIVE) == 0);
 
-	if (qt->active[queue] == NULL)
-		patch_insert_head(&qt->active[queue], p);
+	p->flags |= PF_ACTIVE;
+
+	qt->nactive++;
+	assert(qt->nactive <= qt->npatches);
+
+	if (p->flags & PF_CULLED)
+		list_add_tail(&p->list, &qt->culled);
 	else {
-		if (p->priority > qt->active[queue]->priority)
-			patch_insert_tail(&qt->active[queue], p);
-		else
-			patch_insert_head(&qt->active[queue], p);
+		if (list_empty(&qt->visible))
+			list_add(&p->list, &qt->visible);
+		else {
+			struct list_head *pp;
+
+			list_for_each(pp, &qt->visible) {
+				struct patch *ap = list_entry(pp, struct patch, list);
+
+				if (p->priority >= ap->priority) {
+					/* insert p before ap */
+					list_add_tail(&p->list, &ap->list);
+					return;
+				}
+			}
+			/* p's prio less than everything else on the list */
+			list_add_tail(&p->list, &qt->visible);
+		}
 	}
 }
 
 static void patch_remove_active(struct quadtree *qt, struct patch *p)
 {
-	int queue = p->priority / PRIO_BUCKETS;
+	assert(p->flags & PF_ACTIVE);
 
-	patch_remove(&qt->active[queue], p);
+	p->flags &= ~PF_ACTIVE;
+	list_del(&p->list);
+
+	assert(qt->nactive > 0);
+	qt->nactive--;
+}
+
+static struct patch *find_lowest(struct quadtree *qt)
+{
+	struct list_head *pp;
+	struct patch *ret = NULL;
+
+	list_for_each_prev(pp, &qt->culled) {
+		struct patch *p = list_entry(pp, struct patch, list);
+			
+		if (p->level > 0 && (p->flags & (PF_VISITED|PF_PINNED)) == 0) {
+			ret = p;
+			break;
+		}
+	}
+
+	if (ret == NULL) {
+		list_for_each_prev(pp, &qt->visible) {
+			struct patch *p = list_entry(pp, struct patch, list);
+			
+			if (p->level > 0 && (p->flags & (PF_VISITED|PF_PINNED)) == 0) {
+				ret = p;
+				break;
+			}
+		}
+	}
+
+	if (ret) {
+		assert((ret->flags & (PF_ACTIVE|PF_VISITED|PF_PINNED)) == PF_ACTIVE);
+
+		printf("find_lowest returning %s (prio %d %s), flags=%x\n",
+		       id2str(ret), ret->priority, ret->flags & PF_CULLED ? "culled" : "",
+		       ret->flags);
+	}
+
+	return ret;
+}
+
+static struct patch *find_highest(struct quadtree *qt)
+{
+	struct list_head *pp;
+	struct patch *ret = NULL;
+
+	list_for_each(pp, &qt->visible) {
+		struct patch *p = list_entry(pp, struct patch, list);
+
+		if ((p->flags & PF_VISITED) == 0) {
+			ret = p;
+			break;
+		}
+	}
+
+	if (ret) {
+		assert((ret->flags & (PF_VISITED|PF_PINNED|PF_ACTIVE)) == PF_ACTIVE);
+	}
+
+	return ret;
 }
 
 static void patch_init(struct patch *p, int level, unsigned id)
 {
-	if (p->level != -1) {
+	if ((p->flags & PF_UNUSED) == 0) {
 		/* patch still linked in; break links */
 		printf("recycling %p\n", p);
 
@@ -345,11 +398,11 @@ static void patch_init(struct patch *p, int level, unsigned id)
 			for(int i = 0; i < 4; i++)
 				if (p->parent->kids[i] == p)
 					p->parent->kids[i] = NULL;
-
 		/* unlink from kids */
-		for(int i = 0; i < 4; i++)
+		for(int i = 0; i < 4; i++) {
 			if (p->kids[i] && p->kids[i]->parent == p)
 				p->kids[i]->parent = NULL;
+		}
 
 		/* unlink from neighbours */
 		for(int i = 0; i < 8; i++) {
@@ -364,13 +417,16 @@ static void patch_init(struct patch *p, int level, unsigned id)
 		}
 	}
 
-	p->kids[0] = NULL;
-	p->kids[1] = NULL;
-	p->kids[2] = NULL;
-	p->kids[3] = NULL;
+	for(int i = 0; i < 4; i++)
+		p->col[i] = rand();
 
-	memset(p->neigh, 0, sizeof(p->neigh));
+	for(int i = 0; i < 4; i++)
+		p->kids[i] = NULL;
 
+	for(int i = 0; i < 8; i++)
+		p->neigh[i] = NULL;
+
+	p->flags = 0;
 	p->parent = NULL;
 	p->level = level;
 	p->id = id;
@@ -380,14 +436,32 @@ static void patch_init(struct patch *p, int level, unsigned id)
 
 static struct patch *patch_alloc(struct quadtree *qt)
 {
-	struct patch *p;
+	if (!qt->reclaim && qt->nfree < 8) {
+		qt->reclaim = 1;
 
-	if (qt->freelist == NULL) {
+		while (qt->nfree < 8) {
+			struct patch *lowest = find_lowest(qt);
+			if (lowest == NULL)
+				break;
+			printf("proactive merge %s, freelist %d\n", id2str(lowest), qt->nfree);
+			patch_merge(qt, lowest);
+		}
+		qt->reclaim = 0;
+	}
+
+	if (list_empty(&qt->freelist)) {
 		printf("patch allocation failed!\n");
+		assert(qt->nfree == 0);
 		return NULL;
 	}
 
-	p = patch_remove_head(&qt->freelist);
+	struct list_head *pp = qt->freelist.next;
+	list_del(pp);
+
+	assert(qt->nfree > 0);
+	qt->nfree--;
+
+	struct patch *p = list_entry(pp, struct patch, list);
 
 	//printf("allocated %p\n", p);
 
@@ -396,9 +470,25 @@ static struct patch *patch_alloc(struct quadtree *qt)
 
 static void patch_free(struct quadtree *qt, struct patch *p)
 {
-	//printf("freeing %p\n", p);
-	patch_insert_tail(&qt->freelist, p);
+	printf("freeing %p %s\n", p, id2str(p));
+
+	assert((p->flags & PF_ACTIVE) == 0);
+	p->flags &= ~PF_PINNED;
+
+	list_add_tail(&p->list, &qt->freelist);
+	qt->nfree++;
+	assert(qt->nfree <= qt->npatches);
 }
+
+static void patch_remove_freelist(struct quadtree *qt, struct patch *p)
+{
+	assert(on_freelist(qt, p));
+
+	list_del(&p->list);
+	assert(qt->nfree > 0);
+	qt->nfree--;
+}
+
 
 /* Merge a specific patch. 
 
@@ -431,8 +521,12 @@ static struct patch *patch_merge(struct quadtree *qt, struct patch *p)
 	struct patch *sib[4];	/* the group of siblings including p */
 	unsigned long start_id;
 
+	if (p == NULL)
+		return NULL;
+
 	printf("merging %s\n", id2str(p));
-	assert(!on_freelist(qt, p));
+
+	p->flags |= PF_VISITED;
 
 	if (p->level == 0)
 		return p;
@@ -444,6 +538,13 @@ static struct patch *patch_merge(struct quadtree *qt, struct patch *p)
 		unsigned long sibid = siblingid(p);
 		const struct neighbours *pn = &neighbours[sibid];
 		struct patch *sibling = p->neigh[pn->ccw];
+
+		assert(!on_freelist(qt, p));
+		if ((p->flags & PF_ACTIVE) == 0)
+			emitdot(qt, "assertion.dot");
+		assert(p->flags & PF_ACTIVE);
+
+		p->flags |= PF_PINNED;
 
 		sib[sibid] = p;
 
@@ -487,9 +588,9 @@ static struct patch *patch_merge(struct quadtree *qt, struct patch *p)
 		patch_remove_active(qt, sib[i]);
 
 	if (p->parent != NULL) {
-		parent = p->parent; /* cached parent */
-		assert(on_freelist(qt, parent));
-		patch_remove(&qt->freelist, parent);
+		parent = p->parent;		/* cached parent */
+
+		patch_remove_freelist(qt, parent);
 	} else {
 		unsigned long id = parentid(p, 1);
 		int level = p->level - 1;
@@ -501,7 +602,20 @@ static struct patch *patch_merge(struct quadtree *qt, struct patch *p)
 		assert(!on_freelist(qt, parent));
 
 		patch_init(parent, level, id);
+		
+		parent->x0 = sib[0]->x0;
+		parent->x1 = sib[2]->x1;
+		parent->y0 = sib[0]->y0;
+		parent->y1 = sib[2]->y1;
+		parent->z0 = sib[0]->z0;
+		parent->z1 = sib[2]->z1;
 	}
+	parent->priority = 0;
+	parent->flags |= PF_VISITED | PF_PINNED;
+
+	for(int i = 0; i < 4; i++)
+		assert(parent->kids[i] == NULL ||
+		       parent->kids[i]->parent == parent);
 
 	/* Patch in all the neighbour pointers.  The parent gets them
 	   from its kids.  */
@@ -515,6 +629,8 @@ static struct patch *patch_merge(struct quadtree *qt, struct patch *p)
 
 		assert(sib[i]->neigh[pn->ud] == sib[i]->neigh[pn->ud+1]);
 		parent->neigh[pn->ud+sx] = sib[i]->neigh[pn->ud];
+
+		parent->priority = clamp(parent->priority + sib[i]->priority, 0, 255);
 	}
 
 	/* now that the forward-links are set up, do the backlinks */
@@ -531,6 +647,8 @@ static struct patch *patch_merge(struct quadtree *qt, struct patch *p)
 
 	/* make parent active */
 	patch_insert_active(qt, parent);
+
+	parent->flags &= ~PF_PINNED;
 
 	assert(check_neighbour_levels(parent));
 
@@ -551,13 +669,25 @@ static inline int mid(int a, int b)
    level is >= than p; if it is less, then that neighbour also needs
    to be split.
  */
-static void patch_split(struct quadtree *qt, struct patch *parent)
+static int patch_split(struct quadtree *qt, struct patch *parent)
 {
 	struct patch *k[4] = { NULL, NULL, NULL, NULL };
 
+	if (parent == NULL)
+		return 0;
+
 	printf("splitting %s\n", id2str(parent));
 
+	/* don't split if we're getting too small */
+	if ((parent->x0 != parent->x1 && abs(parent->x0 - parent->x1) / 2 < PATCH_SAMPLES) ||
+	    (parent->y0 != parent->y1 && abs(parent->y0 - parent->y1) / 2 < PATCH_SAMPLES) ||
+	    (parent->z0 != parent->z1 && abs(parent->z0 - parent->z1) / 2 < PATCH_SAMPLES))
+		return 0;
+
+	assert(parent->flags & PF_ACTIVE);
 	assert(!on_freelist(qt, parent));
+
+	parent->flags |= PF_PINNED;
 
 	/* Check all the parent patches neighbours to make sure
 	   they're a suitable level, and split them if not */
@@ -566,7 +696,8 @@ static void patch_split(struct quadtree *qt, struct patch *parent)
 
 		if (parent->neigh[dir]->level < parent->level) {
 			assert(parent->neigh[dir]->level == (parent->level-1));
-			patch_split(qt, parent->neigh[dir]);
+			if (!patch_split(qt, parent->neigh[dir]))
+				return 0; /* split failed */
 		}
 		assert(parent->neigh[dir]->level >= parent->level);
 	}
@@ -583,8 +714,14 @@ static void patch_split(struct quadtree *qt, struct patch *parent)
 
 			k[i]->parent = parent;
 			parent->kids[i] = k[i];
-		} else
-			patch_remove(&qt->freelist, k[i]); /* recycled */
+		} else {
+			assert(k[i]->parent == parent);
+			patch_remove_freelist(qt, k[i]); /* reclaimed */
+		}
+
+		/* XXX ROUGH: each child is roughly 1/4 the screen size of the parent */
+		k[i]->priority = parent->priority / 4;
+		k[i]->flags |= PF_VISITED | PF_PINNED;
 
 		assert(k[i]->parent == parent);
 	}
@@ -652,12 +789,17 @@ static void patch_split(struct quadtree *qt, struct patch *parent)
 		abort();
 
 	patch_remove_active(qt, parent);
-	patch_free(qt, parent);
 
-	for(int i = 0; i < 4; i++)
+	for(int i = 0; i < 4; i++) {
+		parent->kids[i] = k[i];
 		patch_insert_active(qt, k[i]);
 
-	return;
+		k[i]->flags &= ~PF_PINNED;
+	}
+
+	patch_free(qt, parent);
+
+	return 1;
 
   out_fail:
 	for(int i = 0; i < 4; i++)
@@ -665,9 +807,11 @@ static void patch_split(struct quadtree *qt, struct patch *parent)
 			patch_init(k[i], -1, 0);
 			patch_free(qt, k[i]);
 		}
+	return 0;
 }
 
-struct quadtree *quadtree_create(int num_patches, int radius)
+struct quadtree *quadtree_create(int num_patches, long radius, 
+				 int (*generator)(long x, long y, long z))
 {
 	struct quadtree *qt = NULL;
 
@@ -679,9 +823,30 @@ struct quadtree *quadtree_create(int num_patches, int radius)
 	if (qt == NULL)
 		goto out;
 
+	qt->radius = radius;
+
 	qt->patches = malloc(sizeof(struct patch) * num_patches);
 	if (qt->patches == NULL)
 		goto out;
+	qt->npatches = num_patches;
+
+	INIT_LIST_HEAD(&qt->visible);
+	INIT_LIST_HEAD(&qt->culled);
+	INIT_LIST_HEAD(&qt->freelist);
+	qt->nfree = 0;
+	qt->reclaim = 0;
+	qt->nactive = 0;
+
+	/* add patches to freelist */
+	for(int i = 0; i < num_patches; i++) {
+		struct patch *p = &qt->patches[i];
+
+		p->flags = PF_UNUSED; /* never used */
+		p->vertex_offset = i * VERTICES_PER_PATCH;
+		INIT_LIST_HEAD(&p->list);
+
+		patch_free(qt, p);
+	}
 
 	glGenBuffersARB(1, &qt->vtxbufid);
 	glBindBufferARB(GL_ARRAY_BUFFER_BINDING, qt->vtxbufid);
@@ -689,16 +854,6 @@ struct quadtree *quadtree_create(int num_patches, int radius)
 			sizeof(struct vertex) * VERTICES_PER_PATCH * num_patches,
 			NULL, GL_DYNAMIC_DRAW_ARB);
 	glBindBufferARB(GL_ARRAY_BUFFER_BINDING, 0);
-
-	/* add patches to freelist */
-	for(int i = 0; i < num_patches; i++) {
-		struct patch *p = &qt->patches[i];
-
-		p->level = -1; /* mark as never used */
-		p->vertex_offset = i * VERTICES_PER_PATCH;
-
-		patch_free(qt, p);
-	}
 
 	/* 
 
@@ -775,7 +930,7 @@ struct quadtree *quadtree_create(int num_patches, int radius)
 		patch_insert_active(qt, b);
 	}
 
-#if 1
+#if 0
 	emitdot(qt, "base.dot");
 	//patch_split(qt, basis[0]);
 	patch_split(qt, basis[1]);
@@ -818,7 +973,143 @@ struct quadtree *quadtree_create(int num_patches, int radius)
 	return NULL;
 }
 
-void quadtree_update_view(struct quadtree *qt, const float view[16])
+static void project_to_sphere(int radius, long x, long y, long z, long *ox, long *oy, long *oz)
 {
-	
+	float xf = (float)x;
+	float yf = (float)y;
+	float zf = (float)z;
+
+	float len = radius / sqrtf(xf*xf + yf*yf + zf*zf);
+
+	*ox = xf * len;
+	*oy = yf * len;
+	*oz = zf * len;
+}
+
+static void update_prio(struct patch *p,
+			long radius,
+			const double dmv[16],
+			const double dproj[16],
+			const int viewport[4])
+{
+	struct {
+		long x,y,z;
+	} sph[4];
+	struct {
+		GLdouble x, y, z;
+	} proj[4];
+
+	if (p->z0 == p->z1 ||
+	    p->y0 == p->y1) {
+		project_to_sphere(radius, p->x0, p->y0, p->z0, &sph[0].x, &sph[0].y, &sph[0].z);
+		project_to_sphere(radius, p->x1, p->y0, p->z0, &sph[1].x, &sph[1].y, &sph[1].z);
+		project_to_sphere(radius, p->x1, p->y1, p->z1, &sph[2].x, &sph[2].y, &sph[2].z);
+		project_to_sphere(radius, p->x0, p->y1, p->z1, &sph[3].x, &sph[3].y, &sph[3].z);
+	} else {
+		project_to_sphere(radius, p->x0, p->y0, p->z0, &sph[0].x, &sph[0].y, &sph[0].z);
+		project_to_sphere(radius, p->x1, p->y1, p->z0, &sph[1].x, &sph[1].y, &sph[1].z);
+		project_to_sphere(radius, p->x0, p->y1, p->z1, &sph[2].x, &sph[2].y, &sph[2].z);
+		project_to_sphere(radius, p->x0, p->y0, p->z1, &sph[3].x, &sph[3].y, &sph[3].z);
+	}
+
+	for(int i = 0; i < 4; i++)
+		gluProject(sph[i].x, sph[i].y, sph[i].z, dmv, dproj, viewport, &proj[i].x, &proj[i].y, &proj[i].z);
+
+	float area = 0.f;
+	for(unsigned i = 0; i < 4; i++) {
+		unsigned n = (i+1) % 4;
+		area += (proj[i].x * proj[n].y) - (proj[n].x * proj[i].y);
+	}
+
+	area *= 0.5f;
+	area /= viewport[2] * viewport[3];
+
+	if (area < 0) {
+		p->priority = 0;
+		p->flags |= PF_CULLED;
+	} else
+		p->priority = clamp(255 * area, 0, 255);
+
+#if 0
+	glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT);
+	glColor3f(1,1,1);
+	glDisable(GL_BLEND);
+	glDisable(GL_TEXTURE_2D);
+	glDisable(GL_DEPTH_TEST);
+
+	glMatrixMode(GL_PROJECTION);
+	glPushMatrix();
+	glLoadIdentity();
+	glOrtho(viewport[0], viewport[0]+viewport[2], viewport[1], viewport[1]+viewport[3], 0, 1);
+	glMatrixMode(GL_MODELVIEW);
+	glPushMatrix();
+	glLoadIdentity();
+
+	glBegin(GL_LINE_LOOP);
+	for(int i = 0; i < 4; i++)
+		glVertex2d(proj[i].x, proj[i].y);
+	glEnd();
+	glMatrixMode(GL_PROJECTION);
+	glPopMatrix();
+	glMatrixMode(GL_MODELVIEW);
+	glPopMatrix();
+	glPopAttrib();
+#endif
+}
+
+void quadtree_update_view(struct quadtree *qt, 
+			  const float modelview[16],
+			  const float projection[16],
+			  const int viewport[4])
+{
+	const double dmv[16] = { 
+		modelview[ 0], modelview[ 1], modelview[ 2], modelview[ 3],
+		modelview[ 4], modelview[ 5], modelview[ 6], modelview[ 7],
+		modelview[ 8], modelview[ 9], modelview[10], modelview[11],
+		modelview[12], modelview[13], modelview[14], modelview[15],
+	};
+	const double dproj[16] = { 
+		projection[ 0], projection[ 1], projection[ 2], projection[ 3],
+		projection[ 4], projection[ 5], projection[ 6], projection[ 7],
+		projection[ 8], projection[ 9], projection[10], projection[11],
+		projection[12], projection[13], projection[14], projection[15],
+	};
+
+	/* remove all active patches into a local list */
+	struct list_head local, *pp, *pnext;
+	INIT_LIST_HEAD(&local);
+	list_splice_init(&qt->visible, &local);
+	list_splice_init(&qt->culled, &local);
+	qt->nactive = 0;
+
+	/* Project each patch using the view matrix, and compute the
+	   projected area. Use this to generate the priority for each
+	   patch, and update the active list.  */
+	list_for_each_safe(pp, pnext, &local) {
+		struct patch *p = list_entry(pp, struct patch, list);
+
+		list_del(pp);	/* remove from local list */
+
+		p->flags &= ~(PF_VISITED | PF_CULLED | PF_ACTIVE);
+
+		update_prio(p, qt->radius, dmv, dproj, viewport);
+
+		patch_insert_active(qt, p);
+	}
+	assert(list_empty(&local));
+
+	/* try to maintain a policy of having a patch no larger than
+	   2% of the screen */
+	for(int limit = 0; limit < 20; limit++) {
+		struct patch *highest = find_highest(qt);
+
+		if(highest &&
+		   highest->priority > 255 * 2 / 100) {
+			highest->flags |= PF_VISITED;
+
+			if (!patch_split(qt, highest))
+				break;
+		} else
+			break;
+	}
 }

@@ -1,6 +1,8 @@
 #ifndef QUADTREE_H
 #define QUADTREE_H
 
+#include "list.h"
+
 /* 
    A patch is a node in the quadtree.  The tree starts with N root
    patches, at level 0 (where N is either 1 or 6, depending on whether
@@ -120,19 +122,23 @@ struct patch {
 	 */
 	struct patch *neigh[8];
 
-	/* List pointers on either the list/merge queue, or on the
-	   freelist */
-	struct patch *prev, *next;
+	/* Node identifier in quadtree.  This represents the path down
+	   the tree structure to this patch; it can only be interpreted
+	   properly in conjunction with the level. */
+	unsigned long id;
+	unsigned char level;	/* level in quadtree */
 
-	unsigned long id;	/* Node identifier in quadtree.  Child
-				   nodes are numbered:
-				       32
-				       01
-				 */
+	unsigned flags;
+#define PF_VISITED	(1<<0)	/* visited in this pass */
+#define PF_CULLED	(1<<1)	/* not visible */
+#define PF_UNUSED	(1<<2)	/* no valid contents */
+#define PF_PINNED	(1<<3)	/* pinned, do not free */
+#define PF_ACTIVE	(1<<4)	/* active part of the structure */
 
-	signed char level;	/* level in quadtree */
-	unsigned char priority;	/* high-priority: more splittable;
-				   low: more mergable */
+	int priority;	/* high-priority: more splittable;
+			   low: more mergable */
+
+	struct list_head list;	/* list pointers for whatever list we're on */
 
 	/* Offset into the vertex array, in units of
 	   VERTICES_PER_PATCH */
@@ -150,24 +156,7 @@ struct patch {
 	 */
 	elevation_t samples[PATCH_SAMPLES * PATCH_SAMPLES]; /* core samples */
 
-	/* 
-	   But needs (N+1)x(N+1) samples to actually draw; the N+1
-	   edge samples are derived from the right/top neighbour's 0
-	   row/column samples.  If either neighbour is at a coarser
-	   resolution, the mesh uses a fan-structure to fill the gaps.
-
-	   If the left and/or bottom neighbours are coarser, then we
-	   also need to use their vertices rather than our own to fill
-	   cracks: (M = (N/2)-1)
-
-	     M0|N1 N2 N3 ... NN
-	     : |:   :  :      :
-             20|41  :  :    / :
-	       |31  :  :   /  :
-             10|21  :  :  /   :
-	       |11 12 13 ... 1N
-	     00|01 02 03 ... 0N
-	 */
+	unsigned char col[4];
 };
 
 enum plane {
@@ -185,25 +174,49 @@ struct vertex {
 
 #define PRIO_BUCKETS	16
 struct quadtree {
-	/* List of all active patches, in (approx) priority order.
-	   Patches are on a circular list in each bucket; the head is
-	   highest priority, tail lowest.  Patches are added to the
-	   head or tail depending on how its priority compares to the
-	   current head or tail; no finer-grained sorting is used.  */
-	struct patch *active[PRIO_BUCKETS];
-	
-	/* pointer to head of circular freelist; things are added to
-	   the tail and removed from the head, giving an LRU reuse
-	   order */
-	struct patch *freelist;
+	/* List of all visible patches, in priority order.  These are
+	   all the visible patches which are currently part of the
+	   terrain. */
+	struct list_head visible;
+	/* Culled patches are not visible.  They're still active
+	   (they're required for the terrain to have proper topology),
+	   but they're not visible.  They are therefore prime
+	   candidates for merging (and therefore free up 3 patches per
+	   merge). */
+	struct list_head culled;
 
+	unsigned nactive;		/* number of culled+visible patches */
+
+	/* The freelist; things are added to the tail and removed from
+	   the head, giving an LRU reuse order.  These patches still
+	   contain useful information so they're ready to be reused in
+	   their old positions, but they can also be recycled for use
+	   elsewhere in the terrain. */
+	struct list_head freelist;
+	unsigned nfree;
+	int reclaim;		/* currently reclaiming patches */
+
+	/* Array of patch structures.  All patches are allocated out
+	   of this pool.  It is fixed size. */
+	int npatches;
 	struct patch *patches;
 
-	unsigned int vtxbufid;
+	/* ID of vertex buffer object */
+	GLuint vtxbufid;
+
+	/* Radius of the terrain sphere, and the function used to
+	   generate elevation for a particular point on its
+	   surface. */
+	long radius;
+	int (*landscape)(int x, int y, int z);
 };
 
 
-struct quadtree *quadtree_create(int num_patches, int radius);
-void quadtree_update_view(struct quadtree *qt, const float view[16]);
+struct quadtree *quadtree_create(int num_patches, long radius,
+				 int (*generator)(long x, long y, long z));
+void quadtree_update_view(struct quadtree *qt, 
+			  const float modelview[16],
+			  const float projection[16],
+			  const int viewport[4]);
 
 #endif	/* QUADTREE_H */
