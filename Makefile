@@ -10,7 +10,7 @@ font.h: msx
 	./msx > font.h
 
 clean:
-	rm -f font.h msx test *.o *.dot *.ps *~
+	rm -f font.h msx test *.o *.dot *.ps *~ core
 
 %.ps: %.dot
 	dot -Tps $< > $@

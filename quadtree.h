@@ -132,8 +132,11 @@ struct patch {
 #define PF_VISITED	(1<<0)	/* visited in this pass */
 #define PF_CULLED	(1<<1)	/* not visible */
 #define PF_UNUSED	(1<<2)	/* no valid contents */
-#define PF_PINNED	(1<<3)	/* pinned, do not free */
-#define PF_ACTIVE	(1<<4)	/* active part of the structure */
+#define PF_ACTIVE	(1<<3)	/* active part of the structure */
+
+	int pinned;		/* pinned count; this is set to non-0
+				   when this patch is required to
+				   remain as-is */
 
 	int priority;	/* high-priority: more splittable;
 			   low: more mergable */

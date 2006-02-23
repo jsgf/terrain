@@ -316,7 +316,7 @@ static void motion(int x, int y)
 		if (dolly > -RADIUS)
 			dolly = -RADIUS * 1.01;
 
-		printf("dolly = %g\n", dolly);
+		//printf("dolly = %g\n", dolly);
 		lasty = y;
 	} else if (spin) {
 		elevation = y * 360 / height;
