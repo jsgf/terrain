@@ -1,0 +1,8 @@
+.*~$
+.*\.dot$
+.*\.e?ps$
+.*\.o$
+core
+msx
+font\.h
+test
