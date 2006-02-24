@@ -181,16 +181,6 @@ static void draw_patch(const struct patch *p, int culled)
 
 static void draw()
 {
-	static const float cols[] = {
-		1,0,0,.3,
-		0,1,0,.3,
-		0,0,1,.3,
-		1,1,0,.3,
-		0,1,1,.3,
-		1,0,1,.3,
-		1,1,1,.3,
-	};
-
 	glBegin(GL_LINES);
 	  glColor3f(1,0,0);
 	  glVertex3i(-2000, 0, 0);
@@ -237,6 +227,7 @@ static float dolly = -2500;
 static void display()
 {
 	static float angle;
+	static int frame;
 
 	glClearColor(.2,.2,.2,1);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -252,7 +243,7 @@ static void display()
 	GLERROR();
 
 
-	{
+	if (frame++ % 5 == 0) {
 		GLfloat mv[16], proj[16];
 		GLint viewport[4];
 
@@ -267,6 +258,7 @@ static void display()
 	}
 
 
+#if 0
 	glEnable(GL_TEXTURE_2D);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -277,6 +269,14 @@ static void display()
 	GLERROR();
 
 	draw();
+#else
+	glColor3f(1,1,1);
+	glDisable(GL_TEXTURE_2D);
+	glDisable(GL_BLEND);
+	glDisable(GL_CULL_FACE);
+	glDisable(GL_DEPTH_TEST);
+	quadtree_render(qt);
+#endif
 
 	glutSwapBuffers();
 
@@ -339,15 +339,24 @@ static void mouse(int buttons, int state, int x, int y)
 	}
 }
 
+static elevation_t generate(long x, long y, long z)
+{
+	//printf("x=%ld y=%ld z=%ld\n", x, y, z);
+
+	return (cos((float) x * M_PI * 2 / 1000) + 
+		sin((float) y * M_PI * 2 / 2000) +
+		sin((float) z * M_PI * 2 / 2000))* 20;
+}
+
 int main(int argc, char **argv)
 {
-	qt = quadtree_create(200, RADIUS, NULL);
-	
 	glutInit(&argc, argv);
         glutInitDisplayMode(GLUT_RGB | GLUT_DOUBLE | GLUT_DEPTH);
         glutInitWindowSize(480*2, 272*2);
 	glutCreateWindow( __FILE__ );
 
+	qt = quadtree_create(200, RADIUS, generate);
+	
 	//glutSpecialFunc(special_down);
 	glutKeyboardFunc(keydown);
 	glutKeyboardUpFunc(keyup);

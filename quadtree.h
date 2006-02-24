@@ -133,6 +133,8 @@ struct patch {
 #define PF_CULLED	(1<<1)	/* not visible */
 #define PF_UNUSED	(1<<2)	/* no valid contents */
 #define PF_ACTIVE	(1<<3)	/* active part of the structure */
+#define PF_UPDATE_GEOM	(1<<4)	/* geometry needs updating */
+#define PF_STITCH_GEOM	(1<<5)	/* geometry needs stitching */
 
 	int pinned;		/* pinned count; this is set to non-0
 				   when this patch is required to
@@ -147,18 +149,6 @@ struct patch {
 	   VERTICES_PER_PATCH */
 	unsigned short vertex_offset;
 
-	/* 
-	   Each patch has NxN samples:
-
-	     N0 N1 N2 N3 ... NN
-             :  :  :  :    / :
-	     :  :  :  :   /  :
-             :  :  :  :  /   :
-	     10 11 12 13 ... 1N
-	     00 01 02 03 ... 0N
-	 */
-	elevation_t samples[PATCH_SAMPLES * PATCH_SAMPLES]; /* core samples */
-
 	unsigned char col[4];
 };
 
@@ -166,13 +156,6 @@ enum plane {
 	P_XY,
 	P_YZ,
 	P_ZX,
-};
-
-struct vertex {
-	unsigned char s,t;
-	unsigned short col;
-	signed char nx, ny, nz;	/* needed? */
-	float x,y,z;		/* short? */
 };
 
 #define PRIO_BUCKETS	16
@@ -204,22 +187,23 @@ struct quadtree {
 	int npatches;
 	struct patch *patches;
 
-	/* ID of vertex buffer object */
-	GLuint vtxbufid;
+	GLuint vtxbufid;	/* ID of vertex buffer object (0 if not used) */
+	struct vertex *varray;	/* vertex array (NULL if using a VBO) */
 
 	/* Radius of the terrain sphere, and the function used to
 	   generate elevation for a particular point on its
 	   surface. */
 	long radius;
-	int (*landscape)(int x, int y, int z);
+	elevation_t (*landscape)(long x, long y, long z);
 };
 
 
 struct quadtree *quadtree_create(int num_patches, long radius,
-				 int (*generator)(long x, long y, long z));
+				 elevation_t (*generator)(long x, long y, long z));
 void quadtree_update_view(struct quadtree *qt, 
 			  const float modelview[16],
 			  const float projection[16],
 			  const int viewport[4]);
+void quadtree_render(const struct quadtree *qt);
 
 #endif	/* QUADTREE_H */

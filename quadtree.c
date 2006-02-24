@@ -12,6 +12,26 @@
 
 #include "quadtree.h"
 
+static int have_vbo = -1;
+static int have_cva = -1;
+
+#define GLERROR()							\
+do {									\
+	GLenum err = glGetError();					\
+	if (err != GL_NO_ERROR) {					\
+		printf("GL error at %s:%d: %s\n",			\
+		       __FILE__, __LINE__, gluErrorString(err));	\
+	}								\
+} while(0)
+
+struct vertex {
+	//signed char s,t;		// PSP only
+	GLshort s,t;
+	GLubyte col[4];
+	GLbyte nx, ny, nz;	/* needed? */
+	GLfloat x,y,z;		/* short? */
+};
+
 static int patch_merge(struct quadtree *qt, struct patch *p);
 
 static inline int clamp(int x, int lower, int upper)
@@ -23,8 +43,8 @@ static inline int clamp(int x, int lower, int upper)
 	return x;
 }
 
-/* ID management.  The ID is an integer which uniquely identifies all
-   nodes in the quadtree.  It uses 2 bits per level. */
+/* The ID is an integer which uniquely identifies all nodes in the
+   quadtree.  It uses 2 bits per level. */
 
 static const char *id2str(const struct patch *p)
 {
@@ -229,6 +249,8 @@ static void backlink_neighbours(struct patch *p, struct patch *oldp)
 		enum patch_neighbour opp = neigh_opposite(p, dir, oldp);
 		struct patch *n = p->neigh[dir];
 
+		n->flags |= PF_STITCH_GEOM;
+
 		if (opp == PN_BADDIR)
 			continue;
 
@@ -412,7 +434,7 @@ static void patch_init(struct patch *p, int level, unsigned id)
 	for(int i = 0; i < 8; i++)
 		p->neigh[i] = NULL;
 
-	p->flags = 0;
+	p->flags = PF_UPDATE_GEOM | PF_STITCH_GEOM;
 	p->parent = NULL;
 	p->level = level;
 	p->id = id;
@@ -468,7 +490,7 @@ static struct patch *patch_alloc(struct quadtree *qt)
 static void patch_free(struct quadtree *qt, struct patch *p)
 {
 	if ((p->flags & PF_UNUSED) == 0)
-		printf("freeing %p %s\n", p, id2str(p));
+		printf("freeing %p %s freelist=%d\n", p, id2str(p), qt->nfree+1);
 
 	assert((p->flags & PF_ACTIVE) == 0);
 	assert(p->pinned == 0);
@@ -862,7 +884,7 @@ static int patch_split(struct quadtree *qt, struct patch *parent)
 }
 
 struct quadtree *quadtree_create(int num_patches, long radius, 
-				 int (*generator)(long x, long y, long z))
+				 elevation_t (*generator)(long x, long y, long z))
 {
 	struct quadtree *qt = NULL;
 
@@ -874,6 +896,7 @@ struct quadtree *quadtree_create(int num_patches, long radius,
 	if (qt == NULL)
 		goto out;
 
+	qt->landscape = generator;
 	qt->radius = radius;
 
 	qt->patches = malloc(sizeof(struct patch) * num_patches);
@@ -900,12 +923,40 @@ struct quadtree *quadtree_create(int num_patches, long radius,
 		patch_free(qt, p);
 	}
 
-	glGenBuffersARB(1, &qt->vtxbufid);
-	glBindBufferARB(GL_ARRAY_BUFFER_BINDING, qt->vtxbufid);
-	glBufferDataARB(GL_ARRAY_BUFFER_BINDING,
-			sizeof(struct vertex) * VERTICES_PER_PATCH * num_patches,
-			NULL, GL_DYNAMIC_DRAW_ARB);
-	glBindBufferARB(GL_ARRAY_BUFFER_BINDING, 0);
+	printf("vendor: %s\n", glGetString(GL_VENDOR));
+	printf("renderer: %s\n", glGetString(GL_RENDERER));
+	printf("version: %s\n", glGetString(GL_VERSION));
+
+	const GLubyte *extensions = glGetString(GL_EXTENSIONS);
+
+	if (have_vbo == -1) {
+		if (strncmp("1.5", (char *)glGetString(GL_VERSION), 3) == 0)
+			have_vbo = 1;
+		else
+			have_vbo = gluCheckExtension((GLubyte *)"GL_ARB_vertex_buffer_object",
+						     extensions);
+	}
+
+	if (have_cva == -1)
+		have_cva = gluCheckExtension((GLubyte *)"GL_EXT_compiled_vertex_array",
+					     extensions);
+
+	printf("vbo: %d  cva:%d\n", have_vbo, have_cva);
+
+	if (have_vbo) {
+		glGenBuffers(1, &qt->vtxbufid);
+		GLERROR();
+		glBindBuffer(GL_ARRAY_BUFFER, qt->vtxbufid);
+		glBufferData(GL_ARRAY_BUFFER,
+			     sizeof(struct vertex) * VERTICES_PER_PATCH * num_patches,
+			     NULL, GL_DYNAMIC_DRAW_ARB);
+		glBindBuffer(GL_ARRAY_BUFFER, 0);
+		GLERROR();
+		qt->varray = NULL;
+	} else {
+		qt->varray = malloc(sizeof(struct vertex) * VERTICES_PER_PATCH * num_patches);
+		qt->vtxbufid = 0;
+	}
 
 	/* 
 
@@ -989,7 +1040,9 @@ struct quadtree *quadtree_create(int num_patches, long radius,
 	return NULL;
 }
 
-static void project_to_sphere(int radius, long x, long y, long z, long *ox, long *oy, long *oz)
+static void project_to_sphere(int radius,
+			      long x, long y, long z,
+			      long *ox, long *oy, long *oz)
 {
 	float xf = (float)x;
 	float yf = (float)y;
@@ -1000,6 +1053,127 @@ static void project_to_sphere(int radius, long x, long y, long z, long *ox, long
 	*ox = xf * len;
 	*oy = yf * len;
 	*oz = zf * len;
+}
+
+static void generate_geom(struct quadtree *qt)
+{
+	struct list_head *pp;
+
+	if (have_vbo)
+		glBindBuffer(GL_ARRAY_BUFFER, qt->vtxbufid);
+
+	list_for_each(pp, &qt->visible) {
+		struct patch *p = list_entry(pp, struct patch, list);
+
+		if ((p->flags & (PF_UPDATE_GEOM|PF_STITCH_GEOM)) == 0)
+			continue;
+
+		p->flags &= ~(PF_UPDATE_GEOM|PF_STITCH_GEOM); /* TODO stitch */
+
+		struct vertex samples[PATCH_SAMPLES * PATCH_SAMPLES];
+		//struct vertex strip[VERTICES_PER_PATCH];
+
+		if (p->x0 == p->x1) {
+			int dy = p->y1 - p->y0;
+			int dz = p->z1 - p->z0;
+
+			for(int j = 0; j < PATCH_SAMPLES; j++) {
+				for(int i = 0; i < PATCH_SAMPLES; i++) {
+					long x, y, z;
+					long ox,oy,oz;
+					elevation_t elev;
+					struct vertex *v = &samples[j * PATCH_SAMPLES + i];
+
+					x = p->x0;
+					y = p->y0 + (dy * i) / PATCH_SAMPLES;
+					z = p->z0 + (dz * j) / PATCH_SAMPLES;
+
+					elev = (*qt->landscape)(x, y, z);
+
+					project_to_sphere(qt->radius + elev,
+							  x, y, z,
+							  &ox, &oy, &oz);
+					
+					v->s = i;
+					v->t = j;
+					memcpy(v->col, p->col, 4);
+					v->x = ox;
+					v->y = oy;
+					v->z = oz;
+				}
+			}
+		} else if (p->y0 == p->y1) {
+			int dx = p->x1 - p->x0;
+			int dz = p->z1 - p->z0;
+
+			for(int j = 0; j < PATCH_SAMPLES; j++) {
+				for(int i = 0; i < PATCH_SAMPLES; i++) {
+					long x, y, z;
+					long ox,oy,oz;
+					elevation_t elev;
+					struct vertex *v = &samples[j * PATCH_SAMPLES + i];
+
+					x = p->x0 + (dx * i) / PATCH_SAMPLES;
+					y = p->y0;
+					z = p->z0 + (dz * j) / PATCH_SAMPLES;
+
+					elev = (*qt->landscape)(x, y, z);
+
+					project_to_sphere(qt->radius + elev,
+							  x, y, z,
+							  &ox, &oy, &oz);
+					
+					v->s = i;
+					v->t = j;
+					memcpy(v->col, p->col, 4);
+					v->x = ox;
+					v->y = oy;
+					v->z = oz;
+				}
+			}
+		} else if (p->z0 == p->z1) {
+			int dx = p->x1 - p->x0;
+			int dy = p->y1 - p->y0;
+
+			for(int j = 0; j < PATCH_SAMPLES; j++) {
+				for(int i = 0; i < PATCH_SAMPLES; i++) {
+					long x, y, z;
+					long ox,oy,oz;
+					elevation_t elev;
+					struct vertex *v = &samples[j * PATCH_SAMPLES + i];
+
+					x = p->x0 + (dx * i) / PATCH_SAMPLES;
+					y = p->y0 + (dy * j) / PATCH_SAMPLES;
+					z = p->z0;
+					elev = (*qt->landscape)(x, y, z);
+
+					project_to_sphere(qt->radius + elev,
+							  x, y, z,
+							  &ox, &oy, &oz);
+					
+					v->s = i;
+					v->t = j;
+					memcpy(v->col, p->col, 4);
+					v->x = ox;
+					v->y = oy;
+					v->z = oz;
+				}
+			}
+		}
+
+		if (have_vbo) {
+			glBufferSubData(GL_ARRAY_BUFFER,
+					p->vertex_offset * sizeof(struct vertex),
+					sizeof(samples), samples);
+		} else {
+			memcpy(&qt->varray[p->vertex_offset],
+			       samples, sizeof(samples));
+		}
+	}
+
+	if (have_vbo)
+		glBindBuffer(GL_ARRAY_BUFFER, 0);
+
 }
 
 static void update_prio(struct patch *p,
@@ -1129,8 +1303,8 @@ void quadtree_update_view(struct quadtree *qt,
 
 	/* try to maintain a policy of having a patch no larger than
 	   N% of the screen, and no smaller than M% */
-	static const int MAXSIZE = 5;
-	static const int MINSIZE = 1;
+	static const int MAXSIZE = 10;
+	//static const int MINSIZE = 1;
 
   restart_list:
 	list_for_each(pp, &qt->visible) {
@@ -1158,8 +1332,73 @@ void quadtree_update_view(struct quadtree *qt,
 				p->priority * 100 / 255);
 			
 			patch_merge(qt, p);
+
+			/* restart from the beginning of the list,
+			   because everything might have been
+			   rearranged (and anyway, the list head is
+			   where the most splittable patches are
+			   anyway) */
 			goto restart_list;
 		}
 #endif
 	}
+
+	generate_geom(qt);
+}
+
+void quadtree_render(const struct quadtree *qt)
+{
+	assert(have_vbo != -1);
+	assert(have_cva != -1);
+
+	if (have_vbo) {
+		glBindBuffer(GL_ARRAY_BUFFER, qt->vtxbufid);
+		GLERROR();
+	}
+
+	glEnableClientState(GL_VERTEX_ARRAY);
+	glVertexPointer(3, GL_FLOAT, sizeof(struct vertex),
+			(char *)qt->varray + offsetof(struct vertex, x));
+	GLERROR();
+
+#if 1
+	glEnableClientState(GL_COLOR_ARRAY);
+	glColorPointer(3, GL_UNSIGNED_BYTE, sizeof(struct vertex),
+		       (char *)qt->varray + offsetof(struct vertex, col));
+	GLERROR();
+
+	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+	glTexCoordPointer(2, GL_SHORT, sizeof(struct vertex),
+			  (char *)qt->varray + offsetof(struct vertex, s));
+	GLERROR();
+
+	glEnableClientState(GL_NORMAL_ARRAY);
+	glNormalPointer(GL_BYTE, sizeof(struct vertex), 
+			(char *)qt->varray + offsetof(struct vertex, nx));
+	GLERROR();
+#endif
+
+	if (!have_vbo && have_cva)
+		glLockArraysEXT(0, qt->npatches * VERTICES_PER_PATCH);
+
+	struct list_head *pp;
+	list_for_each(pp, &qt->visible) {
+		const struct patch *p = list_entry(pp, struct patch, list);
+
+		assert((p->flags & (PF_ACTIVE|PF_CULLED|PF_UPDATE_GEOM|PF_STITCH_GEOM)) == PF_ACTIVE);
+		glDrawArrays(GL_LINE_STRIP, p->vertex_offset, 
+			     PATCH_SAMPLES * PATCH_SAMPLES);
+		GLERROR();
+	}
+
+	if (have_vbo)
+		glBindBuffer(GL_ARRAY_BUFFER, 0);
+	else if (have_cva)
+		glUnlockArraysEXT();
+
+	glDisableClientState(GL_VERTEX_ARRAY);
+	glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+	glDisableClientState(GL_NORMAL_ARRAY);
+	glDisableClientState(GL_COLOR_ARRAY);
+	GLERROR();
 }
