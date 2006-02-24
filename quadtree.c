@@ -12,6 +12,8 @@
 
 #include "quadtree.h"
 
+#define TRISTRIP	1
+
 static int have_vbo = -1;
 static int have_cva = -1;
 
@@ -321,6 +323,8 @@ static void patch_insert_active(struct quadtree *qt, struct patch *p)
 	if (p->flags & PF_CULLED)
 		list_add_tail(&p->list, &qt->culled);
 	else {
+		qt->nvisible++;
+
 		if (list_empty(&qt->visible))
 			list_add(&p->list, &qt->visible);
 		else {
@@ -350,6 +354,10 @@ static void patch_remove_active(struct quadtree *qt, struct patch *p)
 
 	assert(qt->nactive > 0);
 	qt->nactive--;
+	if ((p->flags & PF_CULLED) == 0) {
+		assert(qt->nvisible > 0);
+		qt->nvisible--;
+	}
 }
 
 static struct patch *find_lowest(struct quadtree *qt)
@@ -891,6 +899,8 @@ struct quadtree *quadtree_create(int num_patches, long radius,
 	if (num_patches < 6)
 		goto out;
 
+	printf("max patches %u\n", 65536 / VERTICES_PER_PATCH);
+
 	qt = malloc(sizeof(*qt));
 
 	if (qt == NULL)
@@ -910,14 +920,15 @@ struct quadtree *quadtree_create(int num_patches, long radius,
 	qt->nfree = 0;
 	qt->reclaim = 0;
 	qt->nactive = 0;
+	qt->nvisible = 0;
 
 	/* add patches to freelist */
 	for(int i = 0; i < num_patches; i++) {
 		struct patch *p = &qt->patches[i];
 
-		p->flags = PF_UNUSED; /* never used */
-		p->vertex_offset = i * VERTICES_PER_PATCH;
+		p->flags = PF_UNUSED; /* has never been used */
 		p->pinned = 0;
+		p->vertex_offset = i * VERTICES_PER_PATCH;
 		INIT_LIST_HEAD(&p->list);
 
 		patch_free(qt, p);
@@ -1055,125 +1066,16 @@ static void project_to_sphere(int radius,
 	*oz = zf * len;
 }
 
-static void generate_geom(struct quadtree *qt)
+static inline unsigned outcode(int x, int y, const int viewport[4])
 {
-	struct list_head *pp;
+	unsigned ret = 0;
 
-	if (have_vbo)
-		glBindBuffer(GL_ARRAY_BUFFER, qt->vtxbufid);
+	ret |= (x < viewport[0]) << 0;
+	ret |= (x >= viewport[0]+viewport[2]) << 1;
+	ret |= (y < viewport[1]) << 2;
+	ret |= (y >= viewport[1]+viewport[3]) << 3;
 
-	list_for_each(pp, &qt->visible) {
-		struct patch *p = list_entry(pp, struct patch, list);
-
-		if ((p->flags & (PF_UPDATE_GEOM|PF_STITCH_GEOM)) == 0)
-			continue;
-
-		p->flags &= ~(PF_UPDATE_GEOM|PF_STITCH_GEOM); /* TODO stitch */
-
-		struct vertex samples[PATCH_SAMPLES * PATCH_SAMPLES];
-		//struct vertex strip[VERTICES_PER_PATCH];
-
-		if (p->x0 == p->x1) {
-			int dy = p->y1 - p->y0;
-			int dz = p->z1 - p->z0;
-
-			for(int j = 0; j < PATCH_SAMPLES; j++) {
-				for(int i = 0; i < PATCH_SAMPLES; i++) {
-					long x, y, z;
-					long ox,oy,oz;
-					elevation_t elev;
-					struct vertex *v = &samples[j * PATCH_SAMPLES + i];
-
-					x = p->x0;
-					y = p->y0 + (dy * i) / PATCH_SAMPLES;
-					z = p->z0 + (dz * j) / PATCH_SAMPLES;
-
-					elev = (*qt->landscape)(x, y, z);
-
-					project_to_sphere(qt->radius + elev,
-							  x, y, z,
-							  &ox, &oy, &oz);
-					
-					v->s = i;
-					v->t = j;
-					memcpy(v->col, p->col, 4);
-					v->x = ox;
-					v->y = oy;
-					v->z = oz;
-				}
-			}
-		} else if (p->y0 == p->y1) {
-			int dx = p->x1 - p->x0;
-			int dz = p->z1 - p->z0;
-
-			for(int j = 0; j < PATCH_SAMPLES; j++) {
-				for(int i = 0; i < PATCH_SAMPLES; i++) {
-					long x, y, z;
-					long ox,oy,oz;
-					elevation_t elev;
-					struct vertex *v = &samples[j * PATCH_SAMPLES + i];
-
-					x = p->x0 + (dx * i) / PATCH_SAMPLES;
-					y = p->y0;
-					z = p->z0 + (dz * j) / PATCH_SAMPLES;
-
-					elev = (*qt->landscape)(x, y, z);
-
-					project_to_sphere(qt->radius + elev,
-							  x, y, z,
-							  &ox, &oy, &oz);
-					
-					v->s = i;
-					v->t = j;
-					memcpy(v->col, p->col, 4);
-					v->x = ox;
-					v->y = oy;
-					v->z = oz;
-				}
-			}
-		} else if (p->z0 == p->z1) {
-			int dx = p->x1 - p->x0;
-			int dy = p->y1 - p->y0;
-
-			for(int j = 0; j < PATCH_SAMPLES; j++) {
-				for(int i = 0; i < PATCH_SAMPLES; i++) {
-					long x, y, z;
-					long ox,oy,oz;
-					elevation_t elev;
-					struct vertex *v = &samples[j * PATCH_SAMPLES + i];
-
-					x = p->x0 + (dx * i) / PATCH_SAMPLES;
-					y = p->y0 + (dy * j) / PATCH_SAMPLES;
-					z = p->z0;
-					elev = (*qt->landscape)(x, y, z);
-
-					project_to_sphere(qt->radius + elev,
-							  x, y, z,
-							  &ox, &oy, &oz);
-					
-					v->s = i;
-					v->t = j;
-					memcpy(v->col, p->col, 4);
-					v->x = ox;
-					v->y = oy;
-					v->z = oz;
-				}
-			}
-		}
-
-		if (have_vbo) {
-			glBufferSubData(GL_ARRAY_BUFFER,
-					p->vertex_offset * sizeof(struct vertex),
-					sizeof(samples), samples);
-		} else {
-			memcpy(&qt->varray[p->vertex_offset],
-			       samples, sizeof(samples));
-		}
-	}
-
-	if (have_vbo)
-		glBindBuffer(GL_ARRAY_BUFFER, 0);
-
+	return ret;
 }
 
 static void update_prio(struct patch *p,
@@ -1188,6 +1090,7 @@ static void update_prio(struct patch *p,
 	struct {
 		GLdouble x, y, z;
 	} proj[4];
+	int oc_or, oc_and;
 
 	if (p->z0 == p->z1 ||
 	    p->y0 == p->y1) {
@@ -1202,19 +1105,32 @@ static void update_prio(struct patch *p,
 		project_to_sphere(radius, p->x0, p->y0, p->z1, &sph[3].x, &sph[3].y, &sph[3].z);
 	}
 
-	for(int i = 0; i < 4; i++)
-		gluProject(sph[i].x, sph[i].y, sph[i].z, dmv, dproj, viewport, &proj[i].x, &proj[i].y, &proj[i].z);
+	oc_or = 0;
+	oc_and = ~0;
 
-	float area = 0.f;
-	for(unsigned i = 0; i < 4; i++) {
-		unsigned n = (i+1) % 4;
-		area += (proj[i].x * proj[n].y) - (proj[n].x * proj[i].y);
+	for(int i = 0; i < 4; i++) {
+		gluProject(sph[i].x, sph[i].y, sph[i].z,
+			   dmv, dproj, viewport,
+			   &proj[i].x, &proj[i].y, &proj[i].z);
+		unsigned oc = outcode(proj[i].x, proj[i].y, viewport);
+
+		oc_or |= oc;
+		oc_and &= oc;
 	}
 
-	area *= 0.5f;
-	area /= viewport[2] * viewport[3];
+	float area = 0.f;
 
-	if (area < 0) {
+	if (!(oc_or && oc_and)) {
+		for(unsigned i = 0; i < 4; i++) {
+			unsigned n = (i+1) % 4;
+			area += (proj[i].x * proj[n].y) - (proj[n].x * proj[i].y);
+		}
+
+		area *= 0.5f;
+		area /= viewport[2] * viewport[3];
+	}
+
+	if ((oc_or && oc_and) || area < 0.f) {
 		p->priority = 0;
 		p->flags |= PF_CULLED;
 	} else
@@ -1247,6 +1163,8 @@ static void update_prio(struct patch *p,
 #endif
 }
 
+static void generate_geom(struct quadtree *qt);
+
 void quadtree_update_view(struct quadtree *qt, 
 			  const float modelview[16],
 			  const float projection[16],
@@ -1271,6 +1189,7 @@ void quadtree_update_view(struct quadtree *qt,
 	list_splice_init(&qt->visible, &local);
 	list_splice_init(&qt->culled, &local);
 	qt->nactive = 0;
+	qt->nvisible = 0;
 
 	/* Project each patch using the view matrix, and compute the
 	   projected area. Use this to generate the priority for each
@@ -1287,6 +1206,9 @@ void quadtree_update_view(struct quadtree *qt,
 		patch_insert_active(qt, p);
 	}
 	assert(list_empty(&local));
+
+	printf("%d active, %d visible, %d culled\n",
+	       qt->nactive, qt->nvisible, qt->nactive - qt->nvisible);
 
 #if 0
 	for(int limit = 0; limit < 10 && (qt->nfree < qt->npatches/10); limit++) {
@@ -1346,7 +1268,227 @@ void quadtree_update_view(struct quadtree *qt,
 	generate_geom(qt);
 }
 
-void quadtree_render(const struct quadtree *qt)
+static void vec3_cross(float out[3], const float a[3], const float b[3])
+{
+	out[0] = a[1] * b[2] - a[2] * b[1];
+	out[1] = a[2] * b[0] - a[0] * b[2];
+	out[2] = a[0] * b[1] - a[1] * b[0];	
+}
+
+static void vec3_normalize(float v[3])
+{
+	float len = sqrtf(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+
+	if (len < 1.e-5)
+		return;
+
+	len = 1.f / len;
+
+	for(int i = 0; i < 3; i++) {
+		v[i] *= len;
+		if (v[i] > 1.f)
+			v[i] = 1.f;
+	}
+}
+
+static void generate_geom(struct quadtree *qt)
+{
+	struct list_head *pp;
+
+	if (have_vbo)
+		glBindBuffer(GL_ARRAY_BUFFER, qt->vtxbufid);
+
+	list_for_each(pp, &qt->visible) {
+		struct patch *p = list_entry(pp, struct patch, list);
+
+		if ((p->flags & (PF_UPDATE_GEOM|PF_STITCH_GEOM)) == 0)
+			continue;
+
+		p->flags &= ~(PF_UPDATE_GEOM|PF_STITCH_GEOM); /* TODO stitch */
+
+		struct vertex samples[(PATCH_SAMPLES+1) * (PATCH_SAMPLES+1)];
+		struct vertex strip[VERTICES_PER_PATCH];
+
+		if (p->x0 == p->x1) {
+			int dy = p->y1 - p->y0;
+			int dz = p->z1 - p->z0;
+
+			for(int j = 0; j <= PATCH_SAMPLES; j++) {
+				for(int i = 0; i <= PATCH_SAMPLES; i++) {
+					long x, y, z;
+					long ox,oy,oz;
+					elevation_t elev;
+					struct vertex *v = &samples[j * (PATCH_SAMPLES+1) + i];
+
+					x = p->x0;
+					y = p->y0 + (dy * i) / PATCH_SAMPLES;
+					z = p->z0 + (dz * j) / PATCH_SAMPLES;
+
+					elev = (*qt->landscape)(x, y, z);
+
+					project_to_sphere(qt->radius + elev,
+							  x, y, z,
+							  &ox, &oy, &oz);
+					
+					v->s = i;
+					v->t = PATCH_SAMPLES - j;
+					memcpy(v->col, p->col, 4);
+					v->x = ox;
+					v->y = oy;
+					v->z = oz;
+				}
+			}
+		} else if (p->y0 == p->y1) {
+			int dx = p->x1 - p->x0;
+			int dz = p->z1 - p->z0;
+
+			for(int j = 0; j <= PATCH_SAMPLES; j++) {
+				for(int i = 0; i <= PATCH_SAMPLES; i++) {
+					long x, y, z;
+					long ox,oy,oz;
+					elevation_t elev;
+					struct vertex *v = &samples[j * (PATCH_SAMPLES+1) + i];
+
+					x = p->x0 + (dx * i) / PATCH_SAMPLES;
+					y = p->y0;
+					z = p->z0 + (dz * j) / PATCH_SAMPLES;
+
+					elev = (*qt->landscape)(x, y, z);
+
+					project_to_sphere(qt->radius + elev,
+							  x, y, z,
+							  &ox, &oy, &oz);
+					
+					v->s = i;
+					v->t = PATCH_SAMPLES - j;
+					memcpy(v->col, p->col, 4);
+					v->x = ox;
+					v->y = oy;
+					v->z = oz;
+				}
+			}
+		} else if (p->z0 == p->z1) {
+			int dx = p->x1 - p->x0;
+			int dy = p->y1 - p->y0;
+
+			for(int j = 0; j <= PATCH_SAMPLES; j++) {
+				for(int i = 0; i <= PATCH_SAMPLES; i++) {
+					long x, y, z;
+					long ox,oy,oz;
+					elevation_t elev;
+					struct vertex *v = &samples[j * (PATCH_SAMPLES+1) + i];
+
+					x = p->x0 + (dx * i) / PATCH_SAMPLES;
+					y = p->y0 + (dy * j) / PATCH_SAMPLES;
+					z = p->z0;
+					elev = (*qt->landscape)(x, y, z);
+
+					project_to_sphere(qt->radius + elev,
+							  x, y, z,
+							  &ox, &oy, &oz);
+					
+					v->s = i;
+					v->t = PATCH_SAMPLES - j;
+					memcpy(v->col, p->col, 4);
+					v->x = ox;
+					v->y = oy;
+					v->z = oz;
+				}
+			}
+		}
+
+		/* quick and dirty normals */
+		for(int y = 0; y < PATCH_SAMPLES; y++) {
+			for(int x = 0; x < PATCH_SAMPLES; x++) {
+				struct vertex *v = &samples[y * (PATCH_SAMPLES+1) + x];
+				struct vertex *vx = &samples[y * (PATCH_SAMPLES+1) + x + 1];
+				struct vertex *vy = &samples[(y+1) * (PATCH_SAMPLES+1) + x];
+				float vecx[3] = { vx->x - v->x,
+						  vx->y - v->y,
+						  vx->z - v->z };
+				float vecy[3] = { vy->x - v->x,
+						  vy->y - v->y,
+						  vy->z - v->z };
+				float cross[3];
+				vec3_cross(cross, vecx, vecy);
+				vec3_normalize(cross);
+
+				v->nx = cross[0] * 127;
+				v->ny = cross[1] * 127;
+				v->nz = cross[2] * 127;
+			}
+		}
+
+		/* just make edge normals copies of their neighbours */
+		for(int x = 0; x < PATCH_SAMPLES; x++) {
+			struct vertex *a, *b;
+
+			a = &samples[PATCH_SAMPLES * (PATCH_SAMPLES+1) + x];
+			b = a - (PATCH_SAMPLES+1);
+
+			a->nx = b->nx;
+			a->ny = b->ny;
+			a->nz = b->nz;
+		}
+
+		for(int y = 0; y < PATCH_SAMPLES+1; y++) {
+			struct vertex *a, *b;
+
+			a = &samples[y * (PATCH_SAMPLES+1) + PATCH_SAMPLES];
+			b = a - 1;
+
+			a->nx = b->nx;
+			a->ny = b->ny;
+			a->nz = b->nz;
+		}
+
+
+
+		if (TRISTRIP) {
+			/* Now stripify. This uses unindexed vertices
+			   because that's what's most efficient for
+			   the PSP.  XXX it might be worth batching
+			   these up into blocks to improve texture
+			   cache locality. */
+			int idx = 0;
+			for(int y = 0; y < PATCH_SAMPLES+1-1; y++) {
+				for(int x = 0; x < PATCH_SAMPLES+1; x++) {
+					strip[idx++] = samples[(y+0) * (PATCH_SAMPLES+1) + x];
+					strip[idx++] = samples[(y+1) * (PATCH_SAMPLES+1) + x];
+				}
+				/* stitch adjacent strips together */
+				strip[idx++] = samples[(y+1) * (PATCH_SAMPLES+1) +
+						       (PATCH_SAMPLES+1 - 1)];
+				strip[idx++] = samples[(y+1) * (PATCH_SAMPLES+1)];
+			}
+			assert(idx == VERTICES_PER_PATCH);
+
+			if (have_vbo) {
+				glBufferSubData(GL_ARRAY_BUFFER,
+						p->vertex_offset * sizeof(struct vertex),
+						sizeof(strip), strip);
+			} else {
+				memcpy(&qt->varray[p->vertex_offset],
+				       strip, sizeof(strip));
+			}
+		} else {
+			if (have_vbo) {
+				glBufferSubData(GL_ARRAY_BUFFER,
+						p->vertex_offset * sizeof(struct vertex),
+						sizeof(samples), samples);
+			} else {
+				memcpy(&qt->varray[p->vertex_offset],
+				       samples, sizeof(samples));
+			}
+		}
+	}
+
+	if (have_vbo)
+		glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+}
+
+void quadtree_render(const struct quadtree *qt, void (*prerender)(const struct patch *p))
 {
 	assert(have_vbo != -1);
 	assert(have_cva != -1);
@@ -1361,7 +1503,6 @@ void quadtree_render(const struct quadtree *qt)
 			(char *)qt->varray + offsetof(struct vertex, x));
 	GLERROR();
 
-#if 1
 	glEnableClientState(GL_COLOR_ARRAY);
 	glColorPointer(3, GL_UNSIGNED_BYTE, sizeof(struct vertex),
 		       (char *)qt->varray + offsetof(struct vertex, col));
@@ -1376,8 +1517,11 @@ void quadtree_render(const struct quadtree *qt)
 	glNormalPointer(GL_BYTE, sizeof(struct vertex), 
 			(char *)qt->varray + offsetof(struct vertex, nx));
 	GLERROR();
-#endif
 
+	/* XXX this isn't very useful, since we're only using each
+	   vertex once anyway.  It would be more useful to have
+	   separate lock/unlock calls, so the caller can lock during
+	   multipass renders. */
 	if (!have_vbo && have_cva)
 		glLockArraysEXT(0, qt->npatches * VERTICES_PER_PATCH);
 
@@ -1386,8 +1530,55 @@ void quadtree_render(const struct quadtree *qt)
 		const struct patch *p = list_entry(pp, struct patch, list);
 
 		assert((p->flags & (PF_ACTIVE|PF_CULLED|PF_UPDATE_GEOM|PF_STITCH_GEOM)) == PF_ACTIVE);
-		glDrawArrays(GL_LINE_STRIP, p->vertex_offset, 
-			     PATCH_SAMPLES * PATCH_SAMPLES);
+
+		if (prerender)
+			(*prerender)(p);
+
+		if (TRISTRIP) {
+			if (1 || have_vbo)
+				glDrawArrays(GL_TRIANGLE_STRIP, p->vertex_offset, 
+					     VERTICES_PER_PATCH);
+			else {
+				glBegin(GL_TRIANGLE_STRIP);
+				for(int i = 0; i < VERTICES_PER_PATCH; i++) {
+					const struct vertex *v = &qt->varray[p->vertex_offset + i];
+
+					glColor3ubv(v->col);
+					glNormal3bv(&v->nx);
+					glTexCoord2sv(&v->s);
+					glVertex3fv(&v->x);
+				}
+				glEnd();
+
+				glPushAttrib(GL_ENABLE_BIT);
+				glDisable(GL_LIGHTING);
+				glDisable(GL_TEXTURE_2D);
+				glColor3f(1,1,0);
+				glBegin(GL_LINES);
+				for(int i = 0; i < VERTICES_PER_PATCH; i++) {
+					const struct vertex *v = &qt->varray[p->vertex_offset + i];
+					glVertex3fv(&v->x);
+					glVertex3f(v->x + v->nx / 4,
+						   v->y + v->ny / 4,
+						   v->z + v->nz / 4);
+				}
+				glEnd();
+				glPopAttrib();
+			}
+		} else {
+			if (1 || have_vbo)
+				glDrawArrays(GL_LINE_STRIP, p->vertex_offset, 
+					     (PATCH_SAMPLES+1) * (PATCH_SAMPLES+1));
+			else {
+				glBegin(GL_LINE_STRIP);
+				for(int i = 0; i < (PATCH_SAMPLES+1) * (PATCH_SAMPLES+1); i++) {
+					glColor3ubv(qt->varray[p->vertex_offset + i].col);
+					glNormal3bv(&qt->varray[p->vertex_offset + i].nx);
+					glVertex3fv(&qt->varray[p->vertex_offset + i].x);
+				}
+				glEnd();
+			}
+		}
 		GLERROR();
 	}
 

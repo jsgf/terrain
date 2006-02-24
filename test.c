@@ -10,7 +10,7 @@
 #include "quadtree.h"
 #include "font.h"
 
-#define RADIUS 1000
+#define RADIUS 1024
 
 static struct quadtree *qt;
 
@@ -117,18 +117,8 @@ static void project_to_sphere(int radius, int x, int y, int z)
 		   zf * radius / len);
 }
 
-static void draw_patch(const struct patch *p, int culled)
+static void set_texture(const struct patch *p)
 {
-	if (culled) 
-		glColor3f(.4,.4,.4);
-	else
-		glColor4ub(p->col[0], p->col[1], p->col[2], .7*255);
-
-	if (0)
-		printf("p=%p id=%lu x=(%d,%d) y=(%d,%d), z=(%d,%d)\n",
-		       p, p->id, p->x0, p->x1, p->y0, p->y1, p->z0, p->z1);
-
-#if 1
 	GLuint texid = (p->id+1) + (1 << (p->level * 2 + 4));
 
 	if (!glIsTexture(texid)) {
@@ -146,6 +136,21 @@ static void draw_patch(const struct patch *p, int culled)
 		texprintf("%s", s);
 	} else
 		glBindTexture(GL_TEXTURE_2D, texid);
+}
+
+static void draw_patch(const struct patch *p, int culled)
+{
+	if (culled) 
+		glColor3f(.4,.4,.4);
+	else
+		glColor4ub(p->col[0], p->col[1], p->col[2], .7*255);
+
+	if (0)
+		printf("p=%p id=%lu x=(%d,%d) y=(%d,%d), z=(%d,%d)\n",
+		       p, p->id, p->x0, p->x1, p->y0, p->y1, p->z0, p->z1);
+
+#if 1
+	set_texture(p);
 #else
 	printf("generating tex for p=%p %lu %s\n",
 	       p, p->id, id2str(p));
@@ -258,7 +263,6 @@ static void display()
 	}
 
 
-#if 0
 	glEnable(GL_TEXTURE_2D);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -268,14 +272,23 @@ static void display()
 	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_BLEND);
 	GLERROR();
 
+#if 0
 	draw();
 #else
 	glColor3f(1,1,1);
-	glDisable(GL_TEXTURE_2D);
+	//glDisable(GL_TEXTURE_2D);
 	glDisable(GL_BLEND);
 	glDisable(GL_CULL_FACE);
-	glDisable(GL_DEPTH_TEST);
-	quadtree_render(qt);
+	glEnable(GL_DEPTH_TEST);
+	//glPolygonMode(GL_BACK, GL_LINE);
+	GLERROR();
+
+	glMatrixMode(GL_TEXTURE);
+	glLoadIdentity();
+	glScalef(1./16, 1./16, 1);
+	glMatrixMode(GL_MODELVIEW);
+
+	quadtree_render(qt, set_texture);
 #endif
 
 	glutSwapBuffers();
@@ -345,7 +358,7 @@ static elevation_t generate(long x, long y, long z)
 
 	return (cos((float) x * M_PI * 2 / 1000) + 
 		sin((float) y * M_PI * 2 / 2000) +
-		sin((float) z * M_PI * 2 / 2000))* 20;
+		sin((float) z * M_PI * 2 / 800)*1.2)* 20;
 }
 
 int main(int argc, char **argv)
@@ -365,6 +378,23 @@ int main(int argc, char **argv)
 	//glutPassiveMotionFunc(motion);
 	glutMotionFunc(motion);
 	glutMouseFunc(mouse);
+
+	{
+		GLfloat diffcol0[] = { .4, .4, 1, 1 };
+		GLfloat lightdir0[] = { 0, 0, 1, 0 };
+		GLfloat diffcol1[] = { .6, .2, .1, 1 };
+		GLfloat lightdir1[] = { .707, .707, 0, 0 };
+
+		glEnable(GL_LIGHTING);
+
+		glEnable(GL_LIGHT0);
+		glLightfv(GL_LIGHT0, GL_DIFFUSE, diffcol0);
+		glLightfv(GL_LIGHT0, GL_POSITION, lightdir0);
+
+		glEnable(GL_LIGHT1);
+		glLightfv(GL_LIGHT1, GL_DIFFUSE, diffcol1);
+		glLightfv(GL_LIGHT1, GL_POSITION, lightdir1);
+	}
 
 	glutMainLoop();
 }

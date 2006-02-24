@@ -65,7 +65,7 @@
  */
 
 #define PATCH_SAMPLES	16	/* N */
-#define VERTICES_PER_PATCH	((PATCH_SAMPLES + 1) * (PATCH_SAMPLES + 1))
+#define VERTICES_PER_PATCH	((2*(PATCH_SAMPLES+1) + 2) * ((PATCH_SAMPLES+1) - 1))
 
 typedef short elevation_t;	/* basic sample type of a heightfield */
 
@@ -147,7 +147,7 @@ struct patch {
 
 	/* Offset into the vertex array, in units of
 	   VERTICES_PER_PATCH */
-	unsigned short vertex_offset;
+	unsigned vertex_offset;
 
 	unsigned char col[4];
 };
@@ -172,6 +172,7 @@ struct quadtree {
 	struct list_head culled;
 
 	unsigned nactive;		/* number of culled+visible patches */
+	unsigned nvisible;
 
 	/* The freelist; things are added to the tail and removed from
 	   the head, giving an LRU reuse order.  These patches still
@@ -204,6 +205,6 @@ void quadtree_update_view(struct quadtree *qt,
 			  const float modelview[16],
 			  const float projection[16],
 			  const int viewport[4]);
-void quadtree_render(const struct quadtree *qt);
+void quadtree_render(const struct quadtree *qt, void (*prerender)(const struct patch *p));
 
 #endif	/* QUADTREE_H */
