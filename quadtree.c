@@ -313,6 +313,8 @@ static void link_neighbours_from_parent(struct patch *p)
 
 static void patch_insert_active(struct quadtree *qt, struct patch *p)
 {
+	struct list_head *list;
+
 	assert((p->flags & PF_ACTIVE) == 0);
 
 	p->flags |= PF_ACTIVE;
@@ -321,27 +323,28 @@ static void patch_insert_active(struct quadtree *qt, struct patch *p)
 	assert(qt->nactive <= qt->npatches);
 
 	if (p->flags & PF_CULLED)
-		list_add_tail(&p->list, &qt->culled);
+		list = &qt->culled;
 	else {
 		qt->nvisible++;
+		list = &qt->visible;
+	}
 
-		if (list_empty(&qt->visible))
-			list_add(&p->list, &qt->visible);
-		else {
-			struct list_head *pp;
+	if (list_empty(list))
+		list_add(&p->list, list);
+	else {
+		struct list_head *pp;
 
-			list_for_each(pp, &qt->visible) {
-				struct patch *ap = list_entry(pp, struct patch, list);
+		list_for_each(pp, list) {
+			struct patch *ap = list_entry(pp, struct patch, list);
 
-				if (p->priority >= ap->priority) {
-					/* insert p before ap */
-					list_add_tail(&p->list, &ap->list);
-					return;
-				}
+			if (p->priority >= ap->priority) {
+				/* insert p before ap */
+				list_add_tail(&p->list, &ap->list);
+				return;
 			}
-			/* p's prio less than everything else on the list */
-			list_add_tail(&p->list, &qt->visible);
 		}
+		/* p's prio less than everything else on the list */
+		list_add_tail(&p->list, list);
 	}
 }
 
@@ -365,7 +368,7 @@ static struct patch *find_lowest(struct quadtree *qt)
 	struct list_head *pp;
 	struct patch *ret = NULL;
 
-	list_for_each_prev(pp, &qt->culled) {
+	list_for_each(pp, &qt->culled) {
 		struct patch *p = list_entry(pp, struct patch, list);
 			
 		if (p->level > 0 &&
@@ -463,7 +466,7 @@ static struct patch *patch_alloc(struct quadtree *qt)
 	if (!qt->reclaim && qt->nfree < MINLIST) {
 		qt->reclaim = 1;
 
-		while (qt->nfree < MINLIST) {
+		while (qt->nfree < MINLIST*2) {
 			struct patch *lowest = find_lowest(qt);
 			if (lowest == NULL)
 				break;
@@ -1094,19 +1097,44 @@ static void update_prio(struct patch *p,
 
 	if (p->z0 == p->z1 ||
 	    p->y0 == p->y1) {
-		project_to_sphere(radius, p->x0, p->y0, p->z0, &sph[0].x, &sph[0].y, &sph[0].z);
-		project_to_sphere(radius, p->x1, p->y0, p->z0, &sph[1].x, &sph[1].y, &sph[1].z);
-		project_to_sphere(radius, p->x1, p->y1, p->z1, &sph[2].x, &sph[2].y, &sph[2].z);
-		project_to_sphere(radius, p->x0, p->y1, p->z1, &sph[3].x, &sph[3].y, &sph[3].z);
+		project_to_sphere(radius, p->x0, p->y0, p->z0,
+				  &sph[0].x, &sph[0].y, &sph[0].z);
+		project_to_sphere(radius, p->x1, p->y0, p->z0,
+				  &sph[1].x, &sph[1].y, &sph[1].z);
+		project_to_sphere(radius, p->x1, p->y1, p->z1,
+				  &sph[2].x, &sph[2].y, &sph[2].z);
+		project_to_sphere(radius, p->x0, p->y1, p->z1,
+				  &sph[3].x, &sph[3].y, &sph[3].z);
 	} else {
-		project_to_sphere(radius, p->x0, p->y0, p->z0, &sph[0].x, &sph[0].y, &sph[0].z);
-		project_to_sphere(radius, p->x1, p->y1, p->z0, &sph[1].x, &sph[1].y, &sph[1].z);
-		project_to_sphere(radius, p->x0, p->y1, p->z1, &sph[2].x, &sph[2].y, &sph[2].z);
-		project_to_sphere(radius, p->x0, p->y0, p->z1, &sph[3].x, &sph[3].y, &sph[3].z);
+		project_to_sphere(radius, p->x0, p->y0, p->z0,
+				  &sph[0].x, &sph[0].y, &sph[0].z);
+		project_to_sphere(radius, p->x1, p->y1, p->z0,
+				  &sph[1].x, &sph[1].y, &sph[1].z);
+		project_to_sphere(radius, p->x0, p->y1, p->z1,
+				  &sph[2].x, &sph[2].y, &sph[2].z);
+		project_to_sphere(radius, p->x0, p->y0, p->z1,
+				  &sph[3].x, &sph[3].y, &sph[3].z);
 	}
 
 	oc_or = 0;
 	oc_and = ~0;
+
+	/* This performs two culling tests:
+	   - if the area is < 0, then the patch is back-facing, and is
+	     therefore culled,
+	   - if the projected patch quad is trivially rejectable as
+	     off-screen, it is culled.
+
+	   TODO:
+	   These tests are pretty bogus because they operate on the
+	   flat patch quad without taking into account the shape of
+	   the patch's geometry.  They should test against a full
+	   bounding-box.
+
+	   Instead of looking at backfacing patches, a more useful
+	   cull test is to see if the patch is over the horizion or
+	   not.
+	 */
 
 	for(int i = 0; i < 4; i++) {
 		gluProject(sph[i].x, sph[i].y, sph[i].z,
@@ -1120,21 +1148,41 @@ static void update_prio(struct patch *p,
 
 	float area = 0.f;
 
-	if (!(oc_or && oc_and)) {
-		for(unsigned i = 0; i < 4; i++) {
-			unsigned n = (i+1) % 4;
-			area += (proj[i].x * proj[n].y) - (proj[n].x * proj[i].y);
-		}
-
-		area *= 0.5f;
-		area /= viewport[2] * viewport[3];
+	for(unsigned i = 0; i < 4; i++) {
+		unsigned n = (i+1) % 4;
+		area += (proj[i].x * proj[n].y) - (proj[n].x * proj[i].y);
 	}
 
-	if ((oc_or && oc_and) || area < 0.f) {
-		p->priority = 0;
+	area *= 0.5f;
+	area /= viewport[2] * viewport[3];
+
+	if (area > 0.f && (oc_or && oc_and)) {
+		/* culled by being off-screen; compute "area" as
+		   proportional to distance from screen centre */
+		int sx = viewport[0] + viewport[2]/2;
+		int sy = viewport[1] + viewport[3]/2;
+		float px = 0, py = 0;
+
+		for(int i = 0; i < 4; i++) {
+			px += proj[i].x;
+			py += proj[i].y;
+		}
+		px /= 4;
+		py /= 4;
+
+		area = hypotf(px - sx, py - sy) / hypotf(viewport[2], viewport[3]);
 		p->flags |= PF_CULLED;
-	} else
-		p->priority = clamp(255 * area, 0, 255);
+
+		//printf("prio %s %d clipped\n", id2str(p), (int)(area*255.f));
+	} else if (area <= 0.f) {
+		/* culled because its backfacing */
+		area = fabsf(area);
+		area += p->level * .5f;
+		p->flags |= PF_CULLED;
+
+		//printf("prio %s %d backface\n", id2str(p), (int)(area*255.f));
+	}
+	p->priority = 255 * area;//clamp(255 * area, 0, 255);
 
 #if 0
 	glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT);

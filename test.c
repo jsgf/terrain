@@ -10,7 +10,7 @@
 #include "quadtree.h"
 #include "font.h"
 
-#define RADIUS 1024
+#define RADIUS (1<<20)
 
 static struct quadtree *qt;
 
@@ -99,7 +99,7 @@ void reshape (int w, int h)
 
 	glMatrixMode(GL_PROJECTION);
 	glLoadIdentity();
-	gluPerspective(50., 16./9., 1., 10000.);
+	gluPerspective(50., 16./9., RADIUS/100, RADIUS*4);
 
 	glMatrixMode(GL_MODELVIEW);
 }
@@ -228,7 +228,7 @@ static void draw()
 
 static float delta = 1;
 
-static float dolly = -2500;
+static float dolly = -RADIUS * 2.5;
 static void display()
 {
 	static float angle;
@@ -248,7 +248,7 @@ static void display()
 	GLERROR();
 
 
-	if (frame++ % 5 == 0) {
+	if (1 || frame++ % 5 == 0) {
 		GLfloat mv[16], proj[16];
 		GLint viewport[4];
 
@@ -325,8 +325,8 @@ static int lasty = 0;
 static void motion(int x, int y)
 {
 	if (drag) {
-		dolly += y - lasty;
-		if (dolly > -RADIUS)
+		dolly += (y - lasty) * RADIUS/1024;
+		if (dolly > -RADIUS * 1.01)
 			dolly = -RADIUS * 1.01;
 
 		//printf("dolly = %g\n", dolly);
