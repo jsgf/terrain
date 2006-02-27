@@ -14,7 +14,9 @@
 
 static struct quadtree *qt;
 
-float elevation, bearing;
+static float elevation, bearing;
+static int wireframe = 0;
+static int update_view = 1;
 
 #define GLERROR()							\
 do {									\
@@ -104,19 +106,6 @@ void reshape (int w, int h)
 	glMatrixMode(GL_MODELVIEW);
 }
 
-static void project_to_sphere(int radius, int x, int y, int z)
-{
-	float xf = (float)x;
-	float yf = (float)y;
-	float zf = (float)z;
-
-	float len = sqrtf(xf*xf + yf*yf + zf*zf);
-
-	glVertex3f(xf * radius / len,
-		   yf * radius / len,
-		   zf * radius / len);
-}
-
 static void set_texture(const struct patch *p)
 {
 	GLuint texid = (p->id+1) + (1 << (p->level * 2 + 4));
@@ -138,103 +127,15 @@ static void set_texture(const struct patch *p)
 		glBindTexture(GL_TEXTURE_2D, texid);
 }
 
-static void draw_patch(const struct patch *p, int culled)
-{
-	if (culled) 
-		glColor3f(.4,.4,.4);
-	else
-		glColor4ub(p->col[0], p->col[1], p->col[2], .7*255);
-
-	if (0)
-		printf("p=%p id=%lu x=(%d,%d) y=(%d,%d), z=(%d,%d)\n",
-		       p, p->id, p->x0, p->x1, p->y0, p->y1, p->z0, p->z1);
-
-#if 1
-	set_texture(p);
-#else
-	printf("generating tex for p=%p %lu %s\n",
-	       p, p->id, id2str(p));
-	texprintf("%s", id2str(p));
-#endif
-
-	glBegin(GL_QUADS);
-
-	if (p->z0 == p->z1 || /* top, bottom */
-	    p->y0 == p->y1) { /* front, back */
-		glTexCoord2f(0,1);
-		project_to_sphere(RADIUS, p->x0, p->y0, p->z0);
-		glTexCoord2f(1,1);
-		project_to_sphere(RADIUS, p->x1, p->y0, p->z0);
-		glTexCoord2f(1,0);
-		project_to_sphere(RADIUS, p->x1, p->y1, p->z1);
-		glTexCoord2f(0,0);
-		project_to_sphere(RADIUS, p->x0, p->y1, p->z1);
-	} else if (p->x0 == p->x1) { /* left, right */
-		glTexCoord2f(0,1);
-		project_to_sphere(RADIUS, p->x0, p->y0, p->z0);
-		glTexCoord2f(1,1);
-		project_to_sphere(RADIUS, p->x0, p->y1, p->z0);
-		glTexCoord2f(1,0);
-		project_to_sphere(RADIUS, p->x0, p->y1, p->z1);
-		glTexCoord2f(0,0);
-		project_to_sphere(RADIUS, p->x0, p->y0, p->z1);
-	}
-	glEnd();
-
-	GLERROR();
-}
-
-static void draw()
-{
-	glBegin(GL_LINES);
-	  glColor3f(1,0,0);
-	  glVertex3i(-2000, 0, 0);
-	  glColor3f(1,1,1);
-	  glVertex3i( 2000, 0, 0);
-
-	  glColor3f(0,1,0);
-	  glVertex3i(0, -2000, 0);
-	  glColor3f(1,1,1);
-	  glVertex3i(0,  2000, 0);
-
-	  glColor3f(0,0,1);
-	  glVertex3i(0, 0, -2000);
-	  glColor3f(1,1,1);
-	  glVertex3i(0, 0,  2000);
-	glEnd();
-
-	glDisable(GL_DEPTH_TEST);
-	glDisable(GL_CULL_FACE);
-	glDisable(GL_BLEND);
-	GLERROR();
-
-	struct list_head *pp;
-	list_for_each(pp, &qt->culled) {
-		struct patch *p = list_entry(pp, struct patch, list);
-
-		draw_patch(p, 1);
-	}
-
-	glEnable(GL_BLEND);
-	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-	GLERROR();
-	list_for_each(pp, &qt->visible) {
-		struct patch *p = list_entry(pp, struct patch, list);
-
-		draw_patch(p, 0);
-	}
-}
-
 static float delta = 1;
 
 static float dolly = -RADIUS * 2.5;
 static void display()
 {
 	static float angle;
-	static int frame;
 
 	glClearColor(.2,.2,.2,1);
+	glDepthMask(GL_TRUE);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 	glMatrixMode(GL_MODELVIEW);
@@ -248,7 +149,7 @@ static void display()
 	GLERROR();
 
 
-	if (1 || frame++ % 5 == 0) {
+	if (update_view) {
 		GLfloat mv[16], proj[16];
 		GLint viewport[4];
 
@@ -272,15 +173,19 @@ static void display()
 	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_BLEND);
 	GLERROR();
 
-#if 0
-	draw();
-#else
 	glColor3f(1,1,1);
+	glEnable(GL_CULL_FACE);
+	if (wireframe) {
+		glPolygonMode(GL_FRONT, GL_LINE);
+		glDisable(GL_LIGHTING);
+	} else {
+		glPolygonMode(GL_FRONT, GL_FILL);
+		glEnable(GL_LIGHTING);
+	}
+
 	//glDisable(GL_TEXTURE_2D);
 	glDisable(GL_BLEND);
-	glDisable(GL_CULL_FACE);
 	glEnable(GL_DEPTH_TEST);
-	glPolygonMode(GL_FRONT, GL_LINE);
 	GLERROR();
 
 	glMatrixMode(GL_TEXTURE);
@@ -289,32 +194,51 @@ static void display()
 	glMatrixMode(GL_MODELVIEW);
 
 	quadtree_render(qt, set_texture);
+
+#if 0
+	glEnable(GL_POLYGON_OFFSET_LINE);
+	glPolygonMode(GL_FRONT, GL_LINE);
+	glDisable(GL_TEXTURE_2D);
+	glDisable(GL_BLEND);
+	glDisable(GL_LIGHTING);
+	glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+	glColor4f(.2,.2,.2,.2);
+	glPolygonOffset(2,4);
+	glDepthMask(GL_FALSE);
+	GLERROR();
+
+	quadtree_render(qt, NULL);
 #endif
 
 	glutSwapBuffers();
 
-	usleep(10000);
-	glutPostRedisplay();
+	//usleep(10000);
+	//glutPostRedisplay();
 }
 
 static void keydown(unsigned char key, int x, int y)
 {
 	switch(key) {
 	case 'o':
-		delta = 0;
+		update_view = !update_view;
+		break;
+
+	case 'd':
+		wireframe = !wireframe;
 		break;
 
 	case 'x':
 	case 27:
 		exit(0);
 	}
+
+	glutPostRedisplay();
 }
 
 static void keyup(unsigned char key, int x, int y)
 {
 	switch(key) {
 	case 'o':
-		delta = 1;
 		break;
 	}
 }
@@ -335,6 +259,8 @@ static void motion(int x, int y)
 		elevation = y * 360 / height;
 		bearing = x * 360 / width;
 	}
+
+	glutPostRedisplay();
 }
 
 static void mouse(int buttons, int state, int x, int y)
@@ -350,15 +276,17 @@ static void mouse(int buttons, int state, int x, int y)
 		lasty = y;
 		drag = 1;
 	}
+
+	glutPostRedisplay();
 }
 
 static elevation_t generate(long x, long y, long z)
 {
 	//printf("x=%ld y=%ld z=%ld\n", x, y, z);
 
-	return (cos((float) x * M_PI * 2 / 1000) + 
-		sin((float) y * M_PI * 2 / 2000) +
-		sin((float) z * M_PI * 2 / 800)*1.2)* 20;
+	return (cos((float) x * M_PI * 2 / RADIUS) + 
+		sin((float) y * M_PI * 2 / (RADIUS*2)) +
+		sin((float) z * M_PI * 2 / (RADIUS*.8))*1.2)* (RADIUS * .02);
 }
 
 int main(int argc, char **argv)

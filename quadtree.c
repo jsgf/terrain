@@ -12,10 +12,11 @@
 
 #include "quadtree.h"
 
-#define TRISTRIP	1
-
 static int have_vbo = -1;
 static int have_cva = -1;
+
+static GLuint index_bufid = 0;
+static const GLushort (*patchidx)[9][INDICES_PER_PATCH] = &patch_indices;
 
 #define GLERROR()							\
 do {									\
@@ -963,10 +964,18 @@ struct quadtree *quadtree_create(int num_patches, long radius,
 		glBindBuffer(GL_ARRAY_BUFFER, qt->vtxbufid);
 		glBufferData(GL_ARRAY_BUFFER,
 			     sizeof(struct vertex) * VERTICES_PER_PATCH * num_patches,
-			     NULL, GL_DYNAMIC_DRAW_ARB);
+			     NULL, GL_DYNAMIC_DRAW);
 		glBindBuffer(GL_ARRAY_BUFFER, 0);
 		GLERROR();
 		qt->varray = NULL;
+
+		if (index_bufid == 0) {
+			glGenBuffers(1, &index_bufid);
+			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, index_bufid);
+			glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(patch_indices), patch_indices,
+				     GL_STATIC_DRAW);
+			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+		}
 	} else {
 		qt->varray = malloc(sizeof(struct vertex) * VERTICES_PER_PATCH * num_patches);
 		qt->vtxbufid = 0;
@@ -1273,7 +1282,7 @@ void quadtree_update_view(struct quadtree *qt,
 
 	/* try to maintain a policy of having a patch no larger than
 	   N% of the screen, and no smaller than M% */
-	static const int MAXSIZE = 10;
+	static const int MAXSIZE = 20;
 	//static const int MINSIZE = 1;
 
   restart_list:
@@ -1339,6 +1348,26 @@ static void vec3_normalize(float v[3])
 	}
 }
 
+/* Return the a classification of a patch's neighbours to determine
+   which need special handling in generating a mesh.  The return is an
+   index into patch_indices[], and must match genpatchidx.c. */
+static unsigned neighbour_class(const struct patch *p)
+{
+	unsigned ud = 0;
+	unsigned lr = 0;
+
+	lr |= (p->neigh[PN_RIGHT]->level < p->level) << 0;
+	lr |= (p->neigh[PN_LEFT ]->level < p->level) << 1;
+
+	ud |= (p->neigh[PN_DOWN ]->level < p->level) << 0;
+	ud |= (p->neigh[PN_UP   ]->level < p->level) << 1;
+
+	assert(lr < 3);
+	assert(ud < 3);
+
+	return ud * 3 + lr;
+}
+
 static void generate_geom(struct quadtree *qt)
 {
 	struct list_head *pp;
@@ -1349,13 +1378,18 @@ static void generate_geom(struct quadtree *qt)
 	list_for_each(pp, &qt->visible) {
 		struct patch *p = list_entry(pp, struct patch, list);
 
+		if (USE_INDEX) {
+			/* with indexed drawing, stitching happens at
+			   render time */
+			p->flags &= ~PF_STITCH_GEOM;
+		}
+
 		if ((p->flags & (PF_UPDATE_GEOM|PF_STITCH_GEOM)) == 0)
 			continue;
 
-		p->flags &= ~(PF_UPDATE_GEOM|PF_STITCH_GEOM); /* TODO stitch */
+		p->flags &= ~(PF_UPDATE_GEOM|PF_STITCH_GEOM);
 
 		struct vertex samples[MESH_SAMPLES * MESH_SAMPLES];
-		struct vertex strip[VERTICES_PER_PATCH];
 
 		if (p->x0 == p->x1) {
 			int dy = p->y1 - p->y0;
@@ -1491,30 +1525,21 @@ static void generate_geom(struct quadtree *qt)
 		}
 
 
+		if (USE_INDEX) {
+			if (have_vbo)
+				glBufferSubData(GL_ARRAY_BUFFER,
+						p->vertex_offset * sizeof(struct vertex),
+						sizeof(samples), samples);
+			else
+				memcpy(&qt->varray[p->vertex_offset],
+				       samples, sizeof(samples));
+		} else {
+			struct vertex strip[VERTICES_PER_PATCH];
+			unsigned nclass = neighbour_class(p);
 
-		if (TRISTRIP) {
-			/* Now stripify. This uses unindexed vertices
-			   because that's what's most efficient for
-			   the PSP.  XXX it might be worth batching
-			   these up into blocks to improve texture
-			   cache locality. */
-			int idx = 0;
-			for(int y = 0; y < MESH_SAMPLES-1; y++) {
-				if (y != 0) {
-					/* stitch adjacent strips together */
-					strip[idx++] = samples[(y-1) * MESH_SAMPLES +
-						       MESH_SAMPLES - 1];
-					strip[idx++] = samples[(y+1) * MESH_SAMPLES];
-				}
-
-				for(int x = 0; x < MESH_SAMPLES; x++) {
-					strip[idx++] = samples[(y+1) * MESH_SAMPLES + x];
-					strip[idx++] = samples[(y+0) * MESH_SAMPLES + x];
-				}
-			}
-			printf("idx=%d VERTICES_PER_PATCH=%d\n", idx, VERTICES_PER_PATCH);
-			assert(idx == VERTICES_PER_PATCH);
-
+			for(int idx = 0; idx < INDICES_PER_PATCH; idx++)
+				strip[idx] = samples[patch_indices[nclass][idx]];
+			
 			if (have_vbo) {
 				glBufferSubData(GL_ARRAY_BUFFER,
 						p->vertex_offset * sizeof(struct vertex),
@@ -1522,15 +1547,6 @@ static void generate_geom(struct quadtree *qt)
 			} else {
 				memcpy(&qt->varray[p->vertex_offset],
 				       strip, sizeof(strip));
-			}
-		} else {
-			if (have_vbo) {
-				glBufferSubData(GL_ARRAY_BUFFER,
-						p->vertex_offset * sizeof(struct vertex),
-						sizeof(samples), samples);
-			} else {
-				memcpy(&qt->varray[p->vertex_offset],
-				       samples, sizeof(samples));
 			}
 		}
 	}
@@ -1540,6 +1556,19 @@ static void generate_geom(struct quadtree *qt)
 
 }
 
+/* set up vertex array pointers, starting at vertex offset "offset" */
+static void set_array_pointers(const struct quadtree *qt, unsigned offset)
+{
+	glVertexPointer(3, GL_FLOAT, sizeof(struct vertex),
+			(char *)&qt->varray[offset] + offsetof(struct vertex, x));
+	glColorPointer(3, GL_UNSIGNED_BYTE, sizeof(struct vertex),
+		       (char *)&qt->varray[offset] + offsetof(struct vertex, col));
+	glTexCoordPointer(2, GL_SHORT, sizeof(struct vertex),
+			  (char *)&qt->varray[offset] + offsetof(struct vertex, s));
+	glNormalPointer(GL_BYTE, sizeof(struct vertex), 
+			(char *)&qt->varray[offset] + offsetof(struct vertex, nx));
+}
+
 void quadtree_render(const struct quadtree *qt, void (*prerender)(const struct patch *p))
 {
 	assert(have_vbo != -1);
@@ -1547,35 +1576,17 @@ void quadtree_render(const struct quadtree *qt, void (*prerender)(const struct p
 
 	if (have_vbo) {
 		glBindBuffer(GL_ARRAY_BUFFER, qt->vtxbufid);
+		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, index_bufid);
 		GLERROR();
 	}
 
 	glEnableClientState(GL_VERTEX_ARRAY);
-	glVertexPointer(3, GL_FLOAT, sizeof(struct vertex),
-			(char *)qt->varray + offsetof(struct vertex, x));
-	GLERROR();
-
 	glEnableClientState(GL_COLOR_ARRAY);
-	glColorPointer(3, GL_UNSIGNED_BYTE, sizeof(struct vertex),
-		       (char *)qt->varray + offsetof(struct vertex, col));
-	GLERROR();
-
 	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-	glTexCoordPointer(2, GL_SHORT, sizeof(struct vertex),
-			  (char *)qt->varray + offsetof(struct vertex, s));
-	GLERROR();
-
 	glEnableClientState(GL_NORMAL_ARRAY);
-	glNormalPointer(GL_BYTE, sizeof(struct vertex), 
-			(char *)qt->varray + offsetof(struct vertex, nx));
-	GLERROR();
 
-	/* XXX this isn't very useful, since we're only using each
-	   vertex once anyway.  It would be more useful to have
-	   separate lock/unlock calls, so the caller can lock during
-	   multipass renders. */
-	if (!have_vbo && have_cva)
-		glLockArraysEXT(0, qt->npatches * VERTICES_PER_PATCH);
+	if (!USE_INDEX)
+		set_array_pointers(qt, 0);
 
 	struct list_head *pp;
 	list_for_each(pp, &qt->visible) {
@@ -1586,58 +1597,23 @@ void quadtree_render(const struct quadtree *qt, void (*prerender)(const struct p
 		if (prerender)
 			(*prerender)(p);
 
-		if (TRISTRIP) {
-			if (1 || have_vbo)
-				glDrawArrays(GL_TRIANGLE_STRIP, p->vertex_offset, 
-					     VERTICES_PER_PATCH);
-			else {
-				glBegin(GL_TRIANGLE_STRIP);
-				for(int i = 0; i < VERTICES_PER_PATCH; i++) {
-					const struct vertex *v = &qt->varray[p->vertex_offset + i];
-
-					glColor3ubv(v->col);
-					glNormal3bv(&v->nx);
-					glTexCoord2sv(&v->s);
-					glVertex3fv(&v->x);
-				}
-				glEnd();
-
-				glPushAttrib(GL_ENABLE_BIT);
-				glDisable(GL_LIGHTING);
-				glDisable(GL_TEXTURE_2D);
-				glColor3f(1,1,0);
-				glBegin(GL_LINES);
-				for(int i = 0; i < VERTICES_PER_PATCH; i++) {
-					const struct vertex *v = &qt->varray[p->vertex_offset + i];
-					glVertex3fv(&v->x);
-					glVertex3f(v->x + v->nx / 4,
-						   v->y + v->ny / 4,
-						   v->z + v->nz / 4);
-				}
-				glEnd();
-				glPopAttrib();
-			}
-		} else {
-			if (1 || have_vbo)
-				glDrawArrays(GL_LINE_STRIP, p->vertex_offset, 
-					     MESH_SAMPLES * MESH_SAMPLES);
-			else {
-				glBegin(GL_LINE_STRIP);
-				for(int i = 0; i < MESH_SAMPLES * MESH_SAMPLES; i++) {
-					glColor3ubv(qt->varray[p->vertex_offset + i].col);
-					glNormal3bv(&qt->varray[p->vertex_offset + i].nx);
-					glVertex3fv(&qt->varray[p->vertex_offset + i].x);
-				}
-				glEnd();
-			}
-		}
+		if (USE_INDEX) {
+			unsigned nclass = neighbour_class(p);
+			
+			set_array_pointers(qt, p->vertex_offset);
+			
+			glDrawElements(GL_TRIANGLE_STRIP, INDICES_PER_PATCH,
+				       GL_UNSIGNED_SHORT, (*patchidx)[nclass]);
+		} else
+			glDrawArrays(GL_TRIANGLE_STRIP, p->vertex_offset, 
+				     VERTICES_PER_PATCH);
 		GLERROR();
 	}
 
-	if (have_vbo)
+	if (have_vbo) {
 		glBindBuffer(GL_ARRAY_BUFFER, 0);
-	else if (have_cva)
-		glUnlockArraysEXT();
+		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+	}
 
 	glDisableClientState(GL_VERTEX_ARRAY);
 	glDisableClientState(GL_TEXTURE_COORD_ARRAY);

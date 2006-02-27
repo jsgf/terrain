@@ -48,18 +48,23 @@
 #define PATCH_SAMPLES	16	/* N */
 #define MESH_SAMPLES	(PATCH_SAMPLES+1)
 
-#define USE_INDEX	0
+#define INDICES_PER_PATCH	((2*MESH_SAMPLES) * (MESH_SAMPLES-1) + (2*(MESH_SAMPLES-2)))
+
+#define USE_INDEX	0	
+
 #if USE_INDEX
-#define VERTICES_PER_PATCH	MESH_SAMPLES
+#define VERTICES_PER_PATCH	(MESH_SAMPLES * MESH_SAMPLES)
 #else  /* !USE_INDEX */
 /* When not indexed, a single strip is generated for each patch using
    copied vertices.  Each row requires 2*MESH_SAMPLES vertices, and
    there are MESH_SAMPLES-1 rows.  Between each row, there are two
    extra vertices to create the stitching degenerate triangle. */
-#define VERTICES_PER_PATCH	((2*MESH_SAMPLES) * (MESH_SAMPLES-1) + (2*(MESH_SAMPLES-2)))
+#define VERTICES_PER_PATCH	INDICES_PER_PATCH
 #endif	/* USE_INDEX */
 
-typedef short elevation_t;	/* basic sample type of a heightfield */
+extern const GLushort patch_indices[9][INDICES_PER_PATCH];
+
+typedef long elevation_t;	/* basic sample type of a heightfield */
 
 /*
   These are the offsets in the neighbour array.  There are two of each

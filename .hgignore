@@ -6,3 +6,5 @@ core
 msx
 font\.h
 test
+genpatchidx
+patchidx\.c
