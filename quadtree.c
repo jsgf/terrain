@@ -1604,8 +1604,10 @@ void quadtree_render(const struct quadtree *qt, void (*prerender)(const struct p
 			
 			set_array_pointers(qt, p->vertex_offset);
 			
-			glDrawElements(GL_TRIANGLE_STRIP, INDICES_PER_PATCH,
-				       GL_UNSIGNED_SHORT, (*patchidx)[nclass]);
+			glDrawRangeElements(GL_TRIANGLE_STRIP,
+					    0, VERTICES_PER_PATCH, 
+					    INDICES_PER_PATCH,
+					    GL_UNSIGNED_SHORT, (*patchidx)[nclass]);
 		} else
 			glDrawArrays(GL_TRIANGLE_STRIP, p->vertex_offset, 
 				     VERTICES_PER_PATCH);

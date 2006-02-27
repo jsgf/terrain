@@ -48,17 +48,16 @@
 #define PATCH_SAMPLES	16	/* N */
 #define MESH_SAMPLES	(PATCH_SAMPLES+1)
 
+/* Number of indicies needed to construct a triangle strip to cover a
+   whole patch mesh, including the overhead to stitch the strip
+   together. */
 #define INDICES_PER_PATCH	((2*MESH_SAMPLES) * (MESH_SAMPLES-1) + (2*(MESH_SAMPLES-2)))
 
-#define USE_INDEX	0	
+#define USE_INDEX	1	
 
 #if USE_INDEX
 #define VERTICES_PER_PATCH	(MESH_SAMPLES * MESH_SAMPLES)
 #else  /* !USE_INDEX */
-/* When not indexed, a single strip is generated for each patch using
-   copied vertices.  Each row requires 2*MESH_SAMPLES vertices, and
-   there are MESH_SAMPLES-1 rows.  Between each row, there are two
-   extra vertices to create the stitching degenerate triangle. */
 #define VERTICES_PER_PATCH	INDICES_PER_PATCH
 #endif	/* USE_INDEX */
 
@@ -175,7 +174,9 @@ struct quadtree {
 	   the head, giving an LRU reuse order.  These patches still
 	   contain useful information so they're ready to be reused in
 	   their old positions, but they can also be recycled for use
-	   elsewhere in the terrain. */
+	   elsewhere in the terrain.  If the freelist gets too empty,
+	   the allocator will automatically start merging patches to
+	   add more patches to the freelist. */
 	struct list_head freelist;
 	unsigned nfree;
 	int reclaim;		/* currently reclaiming patches */

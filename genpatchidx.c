@@ -39,7 +39,7 @@ int main()
 #define D	(1<<0)
 	for(int ud = 0; ud < 3; ud++) {
 		for(int lr = 0; lr < 3; lr++) {
-			printf("/* ud=%d lr=%d */\n", ud, lr);
+			printf("\t/* ud=%d lr=%d */\n", ud, lr);
 			printf("\t{ ");
 			for(int y = 0; y < MESH_SAMPLES-1; y++) {
 				for(int x = 0; x < MESH_SAMPLES; x++) {
