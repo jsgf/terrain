@@ -43,29 +43,35 @@ int main()
 			printf("\t{ ");
 			for(int y = 0; y < MESH_SAMPLES-1; y++) {
 				for(int x = 0; x < MESH_SAMPLES; x++) {
-					int xmask0 = ~0;
-					int xmask1 = ~0;
-					int ymask = ~0;
+					int xmask0 = ~0, xadd0 = 0;
+					int xmask1 = ~0, xadd1 = 0;
+					int ymask = ~0, yadd = 0;
 
-					if (((lr & L) && x == 0) ||
-					    ((lr & R) && x == MESH_SAMPLES-1))
+					if ((lr & L) && x == 0) {
+						ymask = ~1;
+						yadd = 1;
+					}
+
+					if ((lr & R) && x == MESH_SAMPLES-1)
 						ymask = ~1;
 
-					if ((ud & D) && y == 0)
+					if ((ud & D) && y == 0) {
 						xmask0 = ~1;
+						xadd0 = 1;
+					}
 
 					if ((ud & U) && y == MESH_SAMPLES-2)
 						xmask1 = ~1;
 
 					if (y != 0 && x == 0)
-						printf("\n\t  %u, ", ((y+1) & ymask) * MESH_SAMPLES + (x & xmask1));
+						printf("\n\t  %u, ", ((y+1 + yadd) & ymask) * MESH_SAMPLES + ((x + xadd1) & xmask1));
 
 					printf("%u, %u, ",
-					       ((y+1) & ymask) * MESH_SAMPLES + (x & xmask1),
-					       ((y+0) & ymask) * MESH_SAMPLES + (x & xmask0));
+					       ((y+1 + yadd) & ymask) * MESH_SAMPLES + ((x + xadd1) & xmask1),
+					       ((y+0 + yadd) & ymask) * MESH_SAMPLES + ((x + xadd0) & xmask0));
 
 					if (y != MESH_SAMPLES-2 && x == MESH_SAMPLES-1)
-						printf("%u, ", ((y+0) & ymask) * MESH_SAMPLES + (x & xmask0));
+						printf("%u, ", ((y+0 + yadd) & ymask) * MESH_SAMPLES + ((x + xadd0) & xmask0));
 				}
 
 			}
