@@ -1354,19 +1354,19 @@ static void generate_geom(struct quadtree *qt)
 
 		p->flags &= ~(PF_UPDATE_GEOM|PF_STITCH_GEOM); /* TODO stitch */
 
-		struct vertex samples[(PATCH_SAMPLES+1) * (PATCH_SAMPLES+1)];
+		struct vertex samples[MESH_SAMPLES * MESH_SAMPLES];
 		struct vertex strip[VERTICES_PER_PATCH];
 
 		if (p->x0 == p->x1) {
 			int dy = p->y1 - p->y0;
 			int dz = p->z1 - p->z0;
 
-			for(int j = 0; j <= PATCH_SAMPLES; j++) {
-				for(int i = 0; i <= PATCH_SAMPLES; i++) {
+			for(int j = 0; j < MESH_SAMPLES; j++) {
+				for(int i = 0; i < MESH_SAMPLES; i++) {
 					long x, y, z;
 					long ox,oy,oz;
 					elevation_t elev;
-					struct vertex *v = &samples[j * (PATCH_SAMPLES+1) + i];
+					struct vertex *v = &samples[j * MESH_SAMPLES + i];
 
 					x = p->x0;
 					y = p->y0 + (dy * i) / PATCH_SAMPLES;
@@ -1390,12 +1390,12 @@ static void generate_geom(struct quadtree *qt)
 			int dx = p->x1 - p->x0;
 			int dz = p->z1 - p->z0;
 
-			for(int j = 0; j <= PATCH_SAMPLES; j++) {
-				for(int i = 0; i <= PATCH_SAMPLES; i++) {
+			for(int j = 0; j < MESH_SAMPLES; j++) {
+				for(int i = 0; i < MESH_SAMPLES; i++) {
 					long x, y, z;
 					long ox,oy,oz;
 					elevation_t elev;
-					struct vertex *v = &samples[j * (PATCH_SAMPLES+1) + i];
+					struct vertex *v = &samples[j * MESH_SAMPLES + i];
 
 					x = p->x0 + (dx * i) / PATCH_SAMPLES;
 					y = p->y0;
@@ -1419,12 +1419,12 @@ static void generate_geom(struct quadtree *qt)
 			int dx = p->x1 - p->x0;
 			int dy = p->y1 - p->y0;
 
-			for(int j = 0; j <= PATCH_SAMPLES; j++) {
-				for(int i = 0; i <= PATCH_SAMPLES; i++) {
+			for(int j = 0; j < MESH_SAMPLES; j++) {
+				for(int i = 0; i < MESH_SAMPLES; i++) {
 					long x, y, z;
 					long ox,oy,oz;
 					elevation_t elev;
-					struct vertex *v = &samples[j * (PATCH_SAMPLES+1) + i];
+					struct vertex *v = &samples[j * MESH_SAMPLES + i];
 
 					x = p->x0 + (dx * i) / PATCH_SAMPLES;
 					y = p->y0 + (dy * j) / PATCH_SAMPLES;
@@ -1448,9 +1448,9 @@ static void generate_geom(struct quadtree *qt)
 		/* quick and dirty normals */
 		for(int y = 0; y < PATCH_SAMPLES; y++) {
 			for(int x = 0; x < PATCH_SAMPLES; x++) {
-				struct vertex *v = &samples[y * (PATCH_SAMPLES+1) + x];
-				struct vertex *vx = &samples[y * (PATCH_SAMPLES+1) + x + 1];
-				struct vertex *vy = &samples[(y+1) * (PATCH_SAMPLES+1) + x];
+				struct vertex *v = &samples[y * MESH_SAMPLES + x];
+				struct vertex *vx = &samples[y * MESH_SAMPLES + x + 1];
+				struct vertex *vy = &samples[(y+1) * MESH_SAMPLES + x];
 				float vecx[3] = { vx->x - v->x,
 						  vx->y - v->y,
 						  vx->z - v->z };
@@ -1471,7 +1471,7 @@ static void generate_geom(struct quadtree *qt)
 		for(int x = 0; x < PATCH_SAMPLES; x++) {
 			struct vertex *a, *b;
 
-			a = &samples[PATCH_SAMPLES * (PATCH_SAMPLES+1) + x];
+			a = &samples[PATCH_SAMPLES * MESH_SAMPLES + x];
 			b = a - (PATCH_SAMPLES+1);
 
 			a->nx = b->nx;
@@ -1482,7 +1482,7 @@ static void generate_geom(struct quadtree *qt)
 		for(int y = 0; y < PATCH_SAMPLES+1; y++) {
 			struct vertex *a, *b;
 
-			a = &samples[y * (PATCH_SAMPLES+1) + PATCH_SAMPLES];
+			a = &samples[y * MESH_SAMPLES + PATCH_SAMPLES];
 			b = a - 1;
 
 			a->nx = b->nx;
@@ -1499,16 +1499,20 @@ static void generate_geom(struct quadtree *qt)
 			   these up into blocks to improve texture
 			   cache locality. */
 			int idx = 0;
-			for(int y = 0; y < PATCH_SAMPLES+1-1; y++) {
-				for(int x = 0; x < PATCH_SAMPLES+1; x++) {
-					strip[idx++] = samples[(y+0) * (PATCH_SAMPLES+1) + x];
-					strip[idx++] = samples[(y+1) * (PATCH_SAMPLES+1) + x];
+			for(int y = 0; y < MESH_SAMPLES-1; y++) {
+				if (y != 0) {
+					/* stitch adjacent strips together */
+					strip[idx++] = samples[(y-1) * MESH_SAMPLES +
+						       MESH_SAMPLES - 1];
+					strip[idx++] = samples[(y+1) * MESH_SAMPLES];
 				}
-				/* stitch adjacent strips together */
-				strip[idx++] = samples[(y+1) * (PATCH_SAMPLES+1) +
-						       (PATCH_SAMPLES+1 - 1)];
-				strip[idx++] = samples[(y+1) * (PATCH_SAMPLES+1)];
+
+				for(int x = 0; x < MESH_SAMPLES; x++) {
+					strip[idx++] = samples[(y+1) * MESH_SAMPLES + x];
+					strip[idx++] = samples[(y+0) * MESH_SAMPLES + x];
+				}
 			}
+			printf("idx=%d VERTICES_PER_PATCH=%d\n", idx, VERTICES_PER_PATCH);
 			assert(idx == VERTICES_PER_PATCH);
 
 			if (have_vbo) {
@@ -1616,10 +1620,10 @@ void quadtree_render(const struct quadtree *qt, void (*prerender)(const struct p
 		} else {
 			if (1 || have_vbo)
 				glDrawArrays(GL_LINE_STRIP, p->vertex_offset, 
-					     (PATCH_SAMPLES+1) * (PATCH_SAMPLES+1));
+					     MESH_SAMPLES * MESH_SAMPLES);
 			else {
 				glBegin(GL_LINE_STRIP);
-				for(int i = 0; i < (PATCH_SAMPLES+1) * (PATCH_SAMPLES+1); i++) {
+				for(int i = 0; i < MESH_SAMPLES * MESH_SAMPLES; i++) {
 					glColor3ubv(qt->varray[p->vertex_offset + i].col);
 					glNormal3bv(&qt->varray[p->vertex_offset + i].nx);
 					glVertex3fv(&qt->varray[p->vertex_offset + i].x);

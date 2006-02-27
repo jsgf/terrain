@@ -8,10 +8,6 @@
    patches, at level 0 (where N is either 1 or 6, depending on whether
    the world has a planar or cubic basis).
 
-   All but root patchs logically have a parent, and all have 2, 3 or 4
-   neighbours; when using a cubic basis, all patches have 4
-   neighbours.
-
    Every patch has the same number of samples; higher resolution is
    gained by drawing the same number of samples at a smaller scale.
    This means that all patches at all resolutions have exactly the
@@ -33,8 +29,8 @@
    maintains a queue of all patches in priority order; patches with
    lot priority are merged in order to free up patches for use when
    splitting (each merge releases 3 patches for reuse; the 4th is
-   reallocated as the implicit parent).  This means the rendering
-   complexity is always fixed, and.
+   reallocated as the parent).  This means the rendering complexity is
+   always fixed.
 
    Patches are allocated from a freelist.  If a patch is required and
    the freelist is empty, then the lowest priority existing patch is
@@ -44,28 +40,24 @@
    and used as-is.  In other words, the freelist is also a cache of
    recently used patches.
 
-   TO DECIDE: does each patch 1) need copies of the neighbours edge
-   vertices, or 2) indexes them directly?
-
-   1) has the advantage of having a small fixes set of possible patch
-   topologies, which means we can use a small set of fixed index
-   buffers for drawing.  This disadvantage is that if one of the patch
-   neighbours splits, merges or is otherwise modified, we need to
-   update the copies of all the affected vertices.
-
-   The PSP is much faster when not using indexing at all, so 1 with a
-   linearized vertex array would be most performance efficient (but
-   not memory efficient).
-
-   2) has the advantage of only requiring an update of the indices of
-   to neighbouring vertices if the neighbour splits or merges, and no
-   change at all if the vertices are modified.  This disadvantage is
-   that each patch would need a unique set of indices for indexing
-   neighbouring vertices.
+   Each patch has N^2 samples.  The mesh generated for each patch has
+   (N+1)^2 samples; the +1 row/column are copied from neighbouring
+   patches.
  */
 
 #define PATCH_SAMPLES	16	/* N */
-#define VERTICES_PER_PATCH	((2*(PATCH_SAMPLES+1) + 2) * ((PATCH_SAMPLES+1) - 1))
+#define MESH_SAMPLES	(PATCH_SAMPLES+1)
+
+#define USE_INDEX	0
+#if USE_INDEX
+#define VERTICES_PER_PATCH	MESH_SAMPLES
+#else  /* !USE_INDEX */
+/* When not indexed, a single strip is generated for each patch using
+   copied vertices.  Each row requires 2*MESH_SAMPLES vertices, and
+   there are MESH_SAMPLES-1 rows.  Between each row, there are two
+   extra vertices to create the stitching degenerate triangle. */
+#define VERTICES_PER_PATCH	((2*MESH_SAMPLES) * (MESH_SAMPLES-1) + (2*(MESH_SAMPLES-2)))
+#endif	/* USE_INDEX */
 
 typedef short elevation_t;	/* basic sample type of a heightfield */
 

@@ -280,7 +280,7 @@ static void display()
 	glDisable(GL_BLEND);
 	glDisable(GL_CULL_FACE);
 	glEnable(GL_DEPTH_TEST);
-	//glPolygonMode(GL_BACK, GL_LINE);
+	glPolygonMode(GL_FRONT, GL_LINE);
 	GLERROR();
 
 	glMatrixMode(GL_TEXTURE);
