@@ -975,6 +975,8 @@ struct quadtree *quadtree_create(int num_patches, long radius,
 			glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(patch_indices), patch_indices,
 				     GL_STATIC_DRAW);
 			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+
+			patchidx = NULL;
 		}
 	} else {
 		qt->varray = malloc(sizeof(struct vertex) * VERTICES_PER_PATCH * num_patches);
