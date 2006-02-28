@@ -896,7 +896,7 @@ static int patch_split(struct quadtree *qt, struct patch *parent)
 }
 
 struct quadtree *quadtree_create(int num_patches, long radius, 
-				 elevation_t (*generator)(long x, long y, long z))
+				 elevation_t (*generator)(long x, long y, long z, GLubyte col[4]))
 {
 	struct quadtree *qt = NULL;
 
@@ -1284,7 +1284,7 @@ void quadtree_update_view(struct quadtree *qt,
 
 	/* try to maintain a policy of having a patch no larger than
 	   N% of the screen, and no smaller than M% */
-	static const int MAXSIZE = 20;
+	static const int MAXSIZE = 10;
 	//static const int MINSIZE = 1;
 
   restart_list:
@@ -1370,6 +1370,29 @@ static unsigned neighbour_class(const struct patch *p)
 	return ud * 3 + lr;
 }
 
+static void set_vertex(struct quadtree *qt, struct vertex *v,
+		       int i, int j,
+		       long x, long y, long z)
+{
+	long ox, oy, oz;
+	elevation_t elev;
+
+	project_to_sphere(qt->radius,
+			  x, y, z,
+			  &ox, &oy, &oz);
+					
+	elev = (*qt->landscape)(ox, oy, oz, v->col);
+
+	float d = 1.f / sqrtf((float)ox*ox + (float)oy*oy + (float)oz*oz);
+
+	v->s = i;					
+	v->t = PATCH_SAMPLES - j;
+
+	v->x = ox + d * elev * ox;
+	v->y = oy + d * elev * oy;
+	v->z = oz + d * elev * oz;
+}
+
 static void generate_geom(struct quadtree *qt)
 {
 	struct list_head *pp;
@@ -1400,26 +1423,14 @@ static void generate_geom(struct quadtree *qt)
 			for(int j = 0; j < MESH_SAMPLES; j++) {
 				for(int i = 0; i < MESH_SAMPLES; i++) {
 					long x, y, z;
-					long ox,oy,oz;
-					elevation_t elev;
 					struct vertex *v = &samples[j * MESH_SAMPLES + i];
 
 					x = p->x0;
 					y = p->y0 + (dy * i) / PATCH_SAMPLES;
 					z = p->z0 + (dz * j) / PATCH_SAMPLES;
 
-					elev = (*qt->landscape)(x, y, z);
-
-					project_to_sphere(qt->radius + elev,
-							  x, y, z,
-							  &ox, &oy, &oz);
-					
-					v->s = i;
-					v->t = PATCH_SAMPLES - j;
 					memcpy(v->col, p->col, 4);
-					v->x = ox;
-					v->y = oy;
-					v->z = oz;
+					set_vertex(qt, v, i, j, x, y, z);
 				}
 			}
 		} else if (p->y0 == p->y1) {
@@ -1429,26 +1440,14 @@ static void generate_geom(struct quadtree *qt)
 			for(int j = 0; j < MESH_SAMPLES; j++) {
 				for(int i = 0; i < MESH_SAMPLES; i++) {
 					long x, y, z;
-					long ox,oy,oz;
-					elevation_t elev;
 					struct vertex *v = &samples[j * MESH_SAMPLES + i];
 
 					x = p->x0 + (dx * i) / PATCH_SAMPLES;
 					y = p->y0;
 					z = p->z0 + (dz * j) / PATCH_SAMPLES;
 
-					elev = (*qt->landscape)(x, y, z);
-
-					project_to_sphere(qt->radius + elev,
-							  x, y, z,
-							  &ox, &oy, &oz);
-					
-					v->s = i;
-					v->t = PATCH_SAMPLES - j;
 					memcpy(v->col, p->col, 4);
-					v->x = ox;
-					v->y = oy;
-					v->z = oz;
+					set_vertex(qt, v, i, j, x, y, z);
 				}
 			}
 		} else if (p->z0 == p->z1) {
@@ -1458,25 +1457,14 @@ static void generate_geom(struct quadtree *qt)
 			for(int j = 0; j < MESH_SAMPLES; j++) {
 				for(int i = 0; i < MESH_SAMPLES; i++) {
 					long x, y, z;
-					long ox,oy,oz;
-					elevation_t elev;
 					struct vertex *v = &samples[j * MESH_SAMPLES + i];
 
 					x = p->x0 + (dx * i) / PATCH_SAMPLES;
 					y = p->y0 + (dy * j) / PATCH_SAMPLES;
 					z = p->z0;
-					elev = (*qt->landscape)(x, y, z);
 
-					project_to_sphere(qt->radius + elev,
-							  x, y, z,
-							  &ox, &oy, &oz);
-					
-					v->s = i;
-					v->t = PATCH_SAMPLES - j;
 					memcpy(v->col, p->col, 4);
-					v->x = ox;
-					v->y = oy;
-					v->z = oz;
+					set_vertex(qt, v, i, j, x, y, z);
 				}
 			}
 		}

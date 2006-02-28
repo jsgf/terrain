@@ -201,12 +201,12 @@ struct quadtree {
 	   generate elevation for a particular point on its
 	   surface. */
 	long radius;
-	elevation_t (*landscape)(long x, long y, long z);
+	elevation_t (*landscape)(long x, long y, long z, GLubyte col[4]);
 };
 
 
 struct quadtree *quadtree_create(int num_patches, long radius,
-				 elevation_t (*generator)(long x, long y, long z));
+				 elevation_t (*generator)(long x, long y, long z, GLubyte colour[4]));
 void quadtree_update_view(struct quadtree *qt, 
 			  const float modelview[16],
 			  const float projection[16],
