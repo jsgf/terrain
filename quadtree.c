@@ -16,7 +16,7 @@ static int have_vbo = -1;
 static int have_cva = -1;
 
 static GLuint index_bufid = 0;
-static const GLushort (*patchidx)[9][INDICES_PER_PATCH] = &patch_indices;
+static const patch_index_t (*patchidx)[9][INDICES_PER_PATCH] = &patch_indices;
 
 #define GLERROR()							\
 do {									\
@@ -1607,7 +1607,7 @@ void quadtree_render(const struct quadtree *qt, void (*prerender)(const struct p
 			glDrawRangeElements(GL_TRIANGLE_STRIP,
 					    0, VERTICES_PER_PATCH, 
 					    INDICES_PER_PATCH,
-					    GL_UNSIGNED_SHORT, (*patchidx)[nclass]);
+					    PATCH_INDEX_TYPE, (*patchidx)[nclass]);
 		} else
 			glDrawArrays(GL_TRIANGLE_STRIP, p->vertex_offset, 
 				     VERTICES_PER_PATCH);

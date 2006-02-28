@@ -9,7 +9,7 @@ int main()
 {
 	printf("#include <GL/gl.h>\n");
 	printf("#include \"quadtree.h\"\n\n");
-	printf("const GLushort patch_indices[9][INDICES_PER_PATCH] = {\n");
+	printf("const patch_index_t patch_indices[9][INDICES_PER_PATCH] = {\n");
 
 	/* This generates 9 sets of indices for the 9 possible
 	   combinations of neighbour relations.  While there are 4

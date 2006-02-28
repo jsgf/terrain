@@ -45,7 +45,7 @@
    patches.
  */
 
-#define PATCH_SAMPLES	16	/* N */
+#define PATCH_SAMPLES	8	/* N */
 #define MESH_SAMPLES	(PATCH_SAMPLES+1)
 
 /* Number of indicies needed to construct a triangle strip to cover a
@@ -61,7 +61,15 @@
 #define VERTICES_PER_PATCH	INDICES_PER_PATCH
 #endif	/* USE_INDEX */
 
-extern const GLushort patch_indices[9][INDICES_PER_PATCH];
+#if INDICES_PER_PATCH < 256
+typedef GLubyte patch_index_t;
+#define PATCH_INDEX_TYPE	GL_UNSIGNED_BYTE
+#else
+typedef GLshort patch_index_t;
+#define PATCH_INDEX_TYPE	GL_UNSIGNED_SHORT
+#endif
+
+extern const patch_index_t patch_indices[9][INDICES_PER_PATCH];
 
 typedef long elevation_t;	/* basic sample type of a heightfield */
 

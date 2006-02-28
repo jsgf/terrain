@@ -190,7 +190,7 @@ static void display()
 
 	glMatrixMode(GL_TEXTURE);
 	glLoadIdentity();
-	glScalef(1./16, 1./16, 1);
+	glScalef(1./PATCH_SAMPLES, 1./PATCH_SAMPLES, 1);
 	glMatrixMode(GL_MODELVIEW);
 
 	quadtree_render(qt, set_texture);
