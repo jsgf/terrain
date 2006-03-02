@@ -1284,8 +1284,8 @@ void quadtree_update_view(struct quadtree *qt,
 
 	/* try to maintain a policy of having a patch no larger than
 	   N% of the screen, and no smaller than M% */
-	static const int MAXSIZE = 10;
-	//static const int MINSIZE = 1;
+	static const int MAXSIZE = 5;
+	static const int MINSIZE = 0;
 
   restart_list:
 	list_for_each(pp, &qt->visible) {
@@ -1307,7 +1307,7 @@ void quadtree_update_view(struct quadtree *qt,
 			goto restart_list;
 		}
 #if 0
-		if (p->priority < (255 * MINSIZE / 100)) {
+		if (p->priority <= (255 * MINSIZE / 100)) {
 			p->flags |= PF_VISITED;
 			printf(">>>merge %p %s %d%%\n",p, id2str(p),
 				p->priority * 100 / 255);

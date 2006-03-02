@@ -1,10 +1,11 @@
-CFLAGS=-Wall -g -std=gnu99
+CFLAGS=-Wall -g -std=gnu99 
 
-test: test.o quadtree.o patchidx.o
-	$(CC) -o $@ test.o quadtree.o patchidx.o -lglut
+test: test.o quadtree.o patchidx.o noise.o
+	$(CC) -o $@ test.o quadtree.o patchidx.o noise.o -lglut
 
 test.o: quadtree.h font.h
 quadtree.o: quadtree.h
+noise.o: noise.h
 
 font.h: msx
 	./msx > font.h

@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include "quadtree.h"
+#include "noise.h"
 #include "font.h"
 
 #define RADIUS (1<<20)
@@ -17,6 +18,9 @@ static struct quadtree *qt;
 static float elevation, bearing;
 static int wireframe = 0;
 static int update_view = 1;
+
+static struct fractal *frac;
+static float maxvariance, variance, offset;
 
 #define GLERROR()							\
 do {									\
@@ -101,7 +105,7 @@ void reshape (int w, int h)
 
 	glMatrixMode(GL_PROJECTION);
 	glLoadIdentity();
-	gluPerspective(50., 16./9., RADIUS/100, RADIUS*4);
+	gluPerspective(50., 16./9., 100, RADIUS*4);
 
 	glMatrixMode(GL_MODELVIEW);
 }
@@ -540,6 +544,18 @@ static const GLubyte gradient[] = {
 	0xf4, 0xf5, 0xf4,
 };
 
+static void normalize(float *f, int n)
+{
+	float mag = 0;
+
+	for(int i = 0; i < n; i++)
+		mag += f[i] * f[i];
+
+	mag = 1 / sqrtf(mag);
+	for(int i = 0; i < n; i++)
+		f[i] *= mag;
+}
+
 static elevation_t generate(long x, long y, long z, GLubyte col[4])
 {
 	float height;
@@ -547,15 +563,25 @@ static elevation_t generate(long x, long y, long z, GLubyte col[4])
 
 	//printf("x=%ld y=%ld z=%ld\n", x, y, z);
 
+	int idx;
+#if 0
 	height = (cos((float) x * M_PI * 2 / RADIUS) + 
 		  sin((float) y * M_PI * 2 / (RADIUS*2)) +
-		  sin((float) z * M_PI * 2 / (RADIUS*.8))*1.2);
-
+		  sin((float) z * M_PI * 2 / (RADIUS*.5))*1.1);
+	idx = (height / 3) * 255 + 150;
 	e = height * (RADIUS * .02);
+#else
+	float v[3] = { x, y, z };
+	normalize(v, 3);
 
-	col[3] = 0xff;
+	height = fractal_fBmtest(frac, v, 8);
 
-	int idx = (height / 3) * 255 + 150;
+	//printf("height(%g, %g, %g) = %g, variance=%g\n", v[0], v[1], v[2], height, variance);
+	idx = ((height * .5f) + .5f) * 255;
+
+	e = height * variance + offset;
+#endif
+
 	if (idx < 0)
 		idx = 0;
 	if (idx > 255)
@@ -564,18 +590,31 @@ static elevation_t generate(long x, long y, long z, GLubyte col[4])
 	col[0] = gradient[idx * 3 + 0];
 	col[1] = gradient[idx * 3 + 1];
 	col[2] = gradient[idx * 3 + 2];
+	col[3] = 0xff;
 
 	return e;
 }
 
 int main(int argc, char **argv)
 {
+	float _variance = RADIUS * .01;
+	float _roughness = .5;
+
+	frac = fractal_create(3, 123, 1.0 - _roughness, 2.25);
+	
+	maxvariance = _variance;
+	variance = maxvariance / .75f;
+	offset = -maxvariance + .75f * variance;
+
+	printf("maxvariance=%g variance=%g offset=%g\n",
+	       maxvariance, variance, offset);
+
 	glutInit(&argc, argv);
         glutInitDisplayMode(GLUT_RGB | GLUT_DOUBLE | GLUT_DEPTH);
         glutInitWindowSize(480*2, 272*2);
 	glutCreateWindow( __FILE__ );
 
-	qt = quadtree_create(200, RADIUS, generate);
+	qt = quadtree_create(1000, RADIUS, generate);
 	
 	//glutSpecialFunc(special_down);
 	glutKeyboardFunc(keydown);
@@ -589,12 +628,12 @@ int main(int argc, char **argv)
 	{
 		GLfloat diffcol0[] = { .4, .4, 1, 1 };
 		GLfloat lightdir0[] = { 0, 0, 1, 0 };
-		GLfloat diffcol1[] = { .6, .2, .1, 1 };
-		GLfloat lightdir1[] = { .707, .707, 0, 0 };
+		GLfloat diffcol1[] = { 1, .9, .6, 1 };
+		GLfloat lightdir1[] = { -1, 0, .5, 0 };
 
 		glEnable(GL_LIGHTING);
 
-		glEnable(GL_LIGHT0);
+		//glEnable(GL_LIGHT0);
 		glLightfv(GL_LIGHT0, GL_DIFFUSE, diffcol0);
 		glLightfv(GL_LIGHT0, GL_POSITION, lightdir0);
 
