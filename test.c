@@ -11,7 +11,7 @@
 #include "noise.h"
 #include "font.h"
 
-#define RADIUS (1<<20)
+#define RADIUS (1<<16)
 
 static struct quadtree *qt;
 
@@ -86,7 +86,7 @@ void reshape (int w, int h)
 
 	glMatrixMode(GL_PROJECTION);
 	glLoadIdentity();
-	gluPerspective(50., 16./9., 100, RADIUS*4);
+	gluPerspective(50., 16./9., 10, RADIUS*4);
 
 	glMatrixMode(GL_MODELVIEW);
 }
@@ -116,7 +116,7 @@ static void set_texture(const struct patch *p)
 
 static float delta = 1;
 
-static float dolly = -RADIUS * 2.5;
+static float dolly = RADIUS * 2.5;
 static void display()
 {
 	static float angle;
@@ -127,8 +127,10 @@ static void display()
 
 	glMatrixMode(GL_MODELVIEW);
 	glLoadIdentity();
-	//gluLookAt(500,-3000,1100, 0,0,0, 0,0,1);
-	glTranslatef(0, 0, dolly);
+
+	float centre = dolly < RADIUS*2 ? RADIUS*2 - dolly: 0;
+	gluLookAt(0,0,-dolly, 0,centre*1.1,0, 0,1,0);
+
 	glRotatef(elevation, 1, 0, 0);
 	glRotatef(bearing, 0, 1, 0);
 	//glRotatef(angle, 0, 1, 1);
@@ -198,6 +200,25 @@ static void display()
 	quadtree_render(qt, NULL);
 #endif
 
+	glPushAttrib(GL_VIEWPORT_BIT | GL_SCISSOR_BIT);
+	glPushMatrix();
+	glLoadIdentity();
+
+	gluLookAt(0,0,-RADIUS*2.5, 0,0,0, 0,1,0);
+	glRotatef(elevation, 1, 0, 0);
+	glRotatef(bearing, 0, 1, 0);
+
+	glViewport(0,0,width/3, height/3);
+	glScissor(0,0,width/3,height/3);
+	glClearColor(.3,.3,.3,1);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+	glDisable(GL_CULL_FACE);
+
+	quadtree_render(qt, set_texture);
+	glPopMatrix();
+	glPopAttrib();
+
 	glutSwapBuffers();
 
 	//usleep(10000);
@@ -238,8 +259,8 @@ static void motion(int x, int y)
 {
 	if (drag) {
 		dolly += (y - lasty) * RADIUS/1024;
-		if (dolly > -RADIUS * 1.01)
-			dolly = -RADIUS * 1.01;
+		if (dolly < RADIUS * 1.01)
+			dolly = RADIUS * 1.01;
 
 		//printf("dolly = %g\n", dolly);
 		lasty = y;

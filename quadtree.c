@@ -1156,9 +1156,6 @@ static void update_prio(struct patch *p,
 				  &sph[3].x, &sph[3].y, &sph[3].z);
 	}
 
-	oc_or = 0;
-	oc_and = ~0;
-
 	/* This performs two culling tests:
 	   - if the area is < 0, then the patch is back-facing, and is
 	     therefore culled,
@@ -1175,6 +1172,9 @@ static void update_prio(struct patch *p,
 	   cull test is to see if the patch is over the horizion or
 	   not.
 	 */
+
+	oc_or = 0;
+	oc_and = ~0;
 
 	for(int i = 0; i < 4; i++) {
 		gluProject(sph[i].x, sph[i].y, sph[i].z,
@@ -1387,6 +1387,11 @@ static void vec3_normalize(float v[3])
 		if (v[i] > 1.f)
 			v[i] = 1.f;
 	}
+}
+
+static float vec3_dot(const float a[3], const float b[3])
+{
+	return a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
 }
 
 /* Return the a classification of a patch's neighbours to determine
