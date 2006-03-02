@@ -13,6 +13,8 @@
 #include "quadtree.h"
 #include "quadtree_priv.h"
 
+static const int DEBUG = 0;
+
 static int have_vbo = -1;
 static int have_cva = -1;
 
@@ -411,9 +413,10 @@ static struct patch *find_lowest(struct quadtree *qt)
 		assert(ret->pinned == 0);
 		assert((ret->flags & (PF_ACTIVE|PF_VISITED)) == PF_ACTIVE);
 
-		printf("find_lowest returning %s (prio %d %s), flags=%x\n",
-		       patch_name(ret, buf), ret->priority, ret->flags & PF_CULLED ? "culled" : "",
-		       ret->flags);
+		if (DEBUG)
+			printf("find_lowest returning %s (prio %d %s), flags=%x\n",
+			       patch_name(ret, buf), ret->priority, ret->flags & PF_CULLED ? "culled" : "",
+			       ret->flags);
 	}
 
 	return ret;
@@ -425,7 +428,8 @@ static void patch_init(struct patch *p, int level, unsigned id)
 
 	if ((p->flags & PF_UNUSED) == 0) {
 		/* patch still linked in; break links */
-		printf("recycling %p\n", p);
+		if (DEBUG)
+			printf("recycling %p\n", p);
 
 		/* unlink from parent */
 		if (p->parent)
@@ -487,8 +491,9 @@ static struct patch *patch_alloc(struct quadtree *qt)
 			if (lowest == NULL)
 				break;
 
-			printf("freelist refill merge %s, freelist %d\n",
-			       patch_name(lowest, buf), qt->nfree);
+			if (DEBUG)
+				printf("freelist refill merge %s, freelist %d\n",
+				       patch_name(lowest, buf), qt->nfree);
 			patch_merge(qt, lowest);
 		}
 		qt->reclaim = 0;
@@ -516,7 +521,7 @@ static struct patch *patch_alloc(struct quadtree *qt)
 /* Add a patch to the freelist. */
 static void patch_free(struct quadtree *qt, struct patch *p)
 {
-	if ((p->flags & PF_UNUSED) == 0) {
+	if (DEBUG && (p->flags & PF_UNUSED) == 0) {
 		char buf[40];
 		printf("freeing %p %s freelist=%d\n",
 		       p, patch_name(p, buf), qt->nfree+1);
@@ -576,7 +581,8 @@ static int patch_merge(struct quadtree *qt, struct patch *p)
 	if (p == NULL)
 		return 0;
 
-	printf("merging %s\n", patch_name(p, buf));
+	if (DEBUG)
+		printf("merging %s\n", patch_name(p, buf));
 
 	p->flags |= PF_VISITED;
 
@@ -754,7 +760,8 @@ static int patch_split(struct quadtree *qt, struct patch *parent)
 	if (parent == NULL)
 		return 0;
 
-	printf("splitting %s\n", patch_name(parent, buf));
+	if (DEBUG)
+		printf("splitting %s\n", patch_name(parent, buf));
 
 	if (parent->pinned) {
 		printf("%s pinned\n", patch_name(parent, buf));
@@ -924,8 +931,6 @@ struct quadtree *quadtree_create(int num_patches, long radius,
 	if (num_patches < 6)
 		goto out;
 
-	printf("max patches %u\n", 65536 / VERTICES_PER_PATCH);
-
 	qt = malloc(sizeof(*qt));
 
 	if (qt == NULL)
@@ -959,9 +964,11 @@ struct quadtree *quadtree_create(int num_patches, long radius,
 		patch_free(qt, p);
 	}
 
-	printf("vendor: %s\n", glGetString(GL_VENDOR));
-	printf("renderer: %s\n", glGetString(GL_RENDERER));
-	printf("version: %s\n", glGetString(GL_VERSION));
+	if (DEBUG) {
+		printf("vendor: %s\n", glGetString(GL_VENDOR));
+		printf("renderer: %s\n", glGetString(GL_RENDERER));
+		printf("version: %s\n", glGetString(GL_VERSION));
+	}
 
 	const GLubyte *extensions = glGetString(GL_EXTENSIONS);
 
@@ -977,7 +984,8 @@ struct quadtree *quadtree_create(int num_patches, long radius,
 		have_cva = gluCheckExtension((GLubyte *)"GL_EXT_compiled_vertex_array",
 					     extensions);
 
-	printf("vbo: %d  cva:%d\n", have_vbo, have_cva);
+	if (DEBUG)
+		printf("vbo: %d  cva:%d\n", have_vbo, have_cva);
 
 	if (have_vbo) {
 		glGenBuffers(1, &qt->vtxbufid);
@@ -1288,8 +1296,9 @@ void quadtree_update_view(struct quadtree *qt,
 	}
 	assert(list_empty(&local));
 
-	printf("%d active, %d visible, %d culled\n",
-	       qt->nactive, qt->nvisible, qt->nactive - qt->nvisible);
+	if (DEBUG)
+		printf("%d active, %d visible, %d culled\n",
+		       qt->nactive, qt->nvisible, qt->nactive - qt->nvisible);
 
 #if 0
 	for(int limit = 0;
@@ -1300,8 +1309,9 @@ void quadtree_update_view(struct quadtree *qt,
 		if (lowest == NULL || lowest->priority > 255 * 2 / 100)
 			break;
 
-		printf("incremental free merge %s, freelist %d\n",
-		       patch_name(lowest, buf), qt->nfree);
+		if (DEBUG)
+			printf("incremental free merge %s, freelist %d\n",
+			       patch_name(lowest, buf), qt->nfree);
 		patch_merge(qt, lowest);
 	}
 	//printf("freelist=%d\n", qt->nfree);
@@ -1325,9 +1335,10 @@ void quadtree_update_view(struct quadtree *qt,
 		if (p->priority >= (255 * MAXSIZE / 100)) {
 			p->flags |= PF_VISITED;
 			
-			printf(">>>split %p %s %d%%\n",
-			       p, patch_name(p, buf),
-				p->priority * 100 / 255);
+			if (DEBUG)
+				printf(">>>split %p %s %d%%\n",
+				       p, patch_name(p, buf),
+				       p->priority * 100 / 255);
 			
 			patch_split(qt, p);
 			goto restart_list;
@@ -1335,8 +1346,10 @@ void quadtree_update_view(struct quadtree *qt,
 #if 0
 		if (p->priority <= (255 * MINSIZE / 100)) {
 			p->flags |= PF_VISITED;
-			printf(">>>merge %p %s %d%%\n",p, patch_name(p, buf),
-				p->priority * 100 / 255);
+
+			if (DEBUG)
+				printf(">>>merge %p %s %d%%\n",p, patch_name(p, buf),
+				       p->priority * 100 / 255);
 			
 			patch_merge(qt, p);
 
