@@ -36,25 +36,6 @@ static unsigned pow2(unsigned x)
 	return 1 << (32 - __builtin_clz(x-1));
 }
 
-static const char *id2str(const struct patch *p)
-{
-	int id = p->id;
-	int level = p->level;
-	static char buf[40];
-	char *cp = buf;
-
-	//cp += sprintf(cp, "%d:", level);
-	*cp++ = '>';
-	cp += sprintf(cp, "%d:", id >> (level * 2));
-
-	for(int i = level-1; i >= 0; i--) {
-		cp += sprintf(cp, "%d.", (id >> (i * 2)) & 3);
-	}
-	cp[-1] = '\0';
-
-	return buf;
-}
-
 static void texprintf(const char *fmt, ...)
 {
 	unsigned len;
@@ -112,13 +93,15 @@ void reshape (int w, int h)
 
 static void set_texture(const struct patch *p)
 {
-	GLuint texid = (p->id+1) + (1 << (p->level * 2 + 4));
+	GLuint texid = (patch_id(p)+1) + (1 << (patch_level(p) * 2 + 4));
 
 	if (!glIsTexture(texid)) {
-		const char *s = id2str(p);
+		char s[40];
+		patch_name(p, s);
+
 		if (0)
 			printf("generating tex %u for p=%p %d:%lu %s\n",
-			       texid, p, p->level,p->id, s);
+			       texid, p, patch_level(p), patch_id(p), s);
 
 		glBindTexture(GL_TEXTURE_2D, texid);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);

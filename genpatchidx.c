@@ -4,11 +4,12 @@
 #include <stdio.h>
 #include <GL/gl.h>
 #include "quadtree.h"
+#include "quadtree_priv.h"
 
 int main()
 {
 	printf("#include <GL/gl.h>\n");
-	printf("#include \"quadtree.h\"\n\n");
+	printf("#include \"quadtree_priv.h\"\n\n");
 	printf("const patch_index_t patch_indices[9][INDICES_PER_PATCH] = {\n");
 
 	/* This generates 9 sets of indices for the 9 possible

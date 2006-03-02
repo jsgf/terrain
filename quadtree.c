@@ -11,6 +11,7 @@
 #include <GL/glu.h>
 
 #include "quadtree.h"
+#include "quadtree_priv.h"
 
 static int have_vbo = -1;
 static int have_cva = -1;
@@ -49,11 +50,10 @@ static inline int clamp(int x, int lower, int upper)
 /* The ID is an integer which uniquely identifies all nodes in the
    quadtree.  It uses 2 bits per level. */
 
-static const char *id2str(const struct patch *p)
+char *patch_name(const struct patch *p, char buf[40])
 {
 	int id = p->id;
 	int level = p->level;
-	static char buf[40];
 	char *cp = buf;
 
 	//cp += sprintf(cp, "%d:", level);
@@ -68,6 +68,16 @@ static const char *id2str(const struct patch *p)
 	return buf;
 }
 
+int patch_level(const struct patch *p)
+{
+	return p->level;
+}
+
+unsigned long patch_id(const struct patch *p)
+{
+	return p->id;
+}
+
 static void emitdotpatch(FILE *f, const struct patch *p)
 {
 	static const char *dirname[] = {
@@ -78,9 +88,11 @@ static void emitdotpatch(FILE *f, const struct patch *p)
 		DN(DOWN)
 #undef DN
 	};
+	char buf[40];
 
 	fprintf(f, "\t\"%p\" [label=\"%s\", shape=%s];\n",
-		p, id2str(p), (p->flags & PF_CULLED) ? "box" : "diamond");
+		p, patch_name(p, buf),
+		(p->flags & PF_CULLED) ? "box" : "diamond");
 		
 	for(enum patch_neighbour d = 0; d < 8; d += 2) {
 		if (p->neigh[d] == p->neigh[d+1]) {
@@ -394,11 +406,13 @@ static struct patch *find_lowest(struct quadtree *qt)
 	}
 
 	if (ret) {
+		char buf[40];
+
 		assert(ret->pinned == 0);
 		assert((ret->flags & (PF_ACTIVE|PF_VISITED)) == PF_ACTIVE);
 
 		printf("find_lowest returning %s (prio %d %s), flags=%x\n",
-		       id2str(ret), ret->priority, ret->flags & PF_CULLED ? "culled" : "",
+		       patch_name(ret, buf), ret->priority, ret->flags & PF_CULLED ? "culled" : "",
 		       ret->flags);
 	}
 
@@ -468,12 +482,13 @@ static struct patch *patch_alloc(struct quadtree *qt)
 		qt->reclaim = 1;
 
 		while (qt->nfree < MINLIST*2) {
+			char buf[40];
 			struct patch *lowest = find_lowest(qt);
 			if (lowest == NULL)
 				break;
 
 			printf("freelist refill merge %s, freelist %d\n",
-			       id2str(lowest), qt->nfree);
+			       patch_name(lowest, buf), qt->nfree);
 			patch_merge(qt, lowest);
 		}
 		qt->reclaim = 0;
@@ -501,8 +516,11 @@ static struct patch *patch_alloc(struct quadtree *qt)
 /* Add a patch to the freelist. */
 static void patch_free(struct quadtree *qt, struct patch *p)
 {
-	if ((p->flags & PF_UNUSED) == 0)
-		printf("freeing %p %s freelist=%d\n", p, id2str(p), qt->nfree+1);
+	if ((p->flags & PF_UNUSED) == 0) {
+		char buf[40];
+		printf("freeing %p %s freelist=%d\n",
+		       p, patch_name(p, buf), qt->nfree+1);
+	}
 
 	assert((p->flags & PF_ACTIVE) == 0);
 	assert(p->pinned == 0);
@@ -553,16 +571,17 @@ static int patch_merge(struct quadtree *qt, struct patch *p)
 	struct patch *parent;	/* the new patch we're creating */
 	struct patch *sib[4] = {};	/* the group of siblings including p */
 	unsigned long start_id;
+	char buf[40];
 
 	if (p == NULL)
 		return 0;
 
-	printf("merging %s\n", id2str(p));
+	printf("merging %s\n", patch_name(p, buf));
 
 	p->flags |= PF_VISITED;
 
 	if (p->level == 0) {
-		printf("merge %s failed: level 0\n", id2str(p));
+		printf("merge %s failed: level 0\n", patch_name(p, buf));
 		return 0;
 	}
 
@@ -578,7 +597,8 @@ static int patch_merge(struct quadtree *qt, struct patch *p)
 		assert(p->flags & PF_ACTIVE);
 
 		if (p->pinned) {
-			printf("merge %s failed: pinned\n", id2str(p));
+			printf("merge %s failed: pinned\n",
+			       patch_name(p, buf));
 			goto out_fail;
 		}
 
@@ -729,14 +749,15 @@ static inline int mid(int a, int b)
 static int patch_split(struct quadtree *qt, struct patch *parent)
 {
 	struct patch *k[4] = { NULL, NULL, NULL, NULL };
+	char buf[40];
 
 	if (parent == NULL)
 		return 0;
 
-	printf("splitting %s\n", id2str(parent));
+	printf("splitting %s\n", patch_name(parent, buf));
 
 	if (parent->pinned) {
-		printf("%s pinned\n", id2str(parent));
+		printf("%s pinned\n", patch_name(parent, buf));
 		return 0;
 	}
 
@@ -1184,14 +1205,14 @@ static void update_prio(struct patch *p,
 		area = hypotf(px - sx, py - sy) / hypotf(viewport[2], viewport[3]);
 		p->flags |= PF_CULLED;
 
-		//printf("prio %s %d clipped\n", id2str(p), (int)(area*255.f));
+		//printf("prio %s %d clipped\n", patch_name(p, buf), (int)(area*255.f));
 	} else if (area <= 0.f) {
 		/* culled because its backfacing */
 		area = fabsf(area);
 		area += p->level * .5f;
 		p->flags |= PF_CULLED;
 
-		//printf("prio %s %d backface\n", id2str(p), (int)(area*255.f));
+		//printf("prio %s %d backface\n", patch_name(p, buf), (int)(area*255.f));
 	}
 	p->priority = 255 * area;//clamp(255 * area, 0, 255);
 
@@ -1229,6 +1250,7 @@ void quadtree_update_view(struct quadtree *qt,
 			  const float projection[16],
 			  const int viewport[4])
 {
+	char buf[40];
 	const double dmv[16] = { 
 		modelview[ 0], modelview[ 1], modelview[ 2], modelview[ 3],
 		modelview[ 4], modelview[ 5], modelview[ 6], modelview[ 7],
@@ -1270,13 +1292,16 @@ void quadtree_update_view(struct quadtree *qt,
 	       qt->nactive, qt->nvisible, qt->nactive - qt->nvisible);
 
 #if 0
-	for(int limit = 0; limit < 10 && (qt->nfree < qt->npatches/10); limit++) {
+	for(int limit = 0;
+	    limit < 10 && (qt->nfree < qt->npatches/10);
+	    limit++) {
 		struct patch *lowest = find_lowest(qt);
+
 		if (lowest == NULL || lowest->priority > 255 * 2 / 100)
 			break;
 
 		printf("incremental free merge %s, freelist %d\n",
-		       id2str(lowest), qt->nfree);
+		       patch_name(lowest, buf), qt->nfree);
 		patch_merge(qt, lowest);
 	}
 	//printf("freelist=%d\n", qt->nfree);
@@ -1300,7 +1325,8 @@ void quadtree_update_view(struct quadtree *qt,
 		if (p->priority >= (255 * MAXSIZE / 100)) {
 			p->flags |= PF_VISITED;
 			
-			printf(">>>split %p %s %d%%\n", p, id2str(p),
+			printf(">>>split %p %s %d%%\n",
+			       p, patch_name(p, buf),
 				p->priority * 100 / 255);
 			
 			patch_split(qt, p);
@@ -1309,7 +1335,7 @@ void quadtree_update_view(struct quadtree *qt,
 #if 0
 		if (p->priority <= (255 * MINSIZE / 100)) {
 			p->flags |= PF_VISITED;
-			printf(">>>merge %p %s %d%%\n",p, id2str(p),
+			printf(">>>merge %p %s %d%%\n",p, patch_name(p, buf),
 				p->priority * 100 / 255);
 			
 			patch_merge(qt, p);
