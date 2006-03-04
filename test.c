@@ -11,7 +11,7 @@
 #include "noise.h"
 #include "font.h"
 
-#define RADIUS (1<<16)
+#define RADIUS (1<<10)
 
 static struct quadtree *qt;
 
@@ -139,17 +139,16 @@ static void display()
 
 
 	if (update_view) {
-		GLfloat mv[16], proj[16];
-		GLint viewport[4];
+		matrix_t mv, proj, combined;
 
-		glGetFloatv(GL_MODELVIEW_MATRIX, mv);
+		glGetFloatv(GL_MODELVIEW_MATRIX, mv.m);
 		GLERROR();
-		glGetFloatv(GL_PROJECTION_MATRIX, proj);
-		GLERROR();
-		glGetIntegerv(GL_VIEWPORT, viewport);
+		glGetFloatv(GL_PROJECTION_MATRIX, proj.m);
 		GLERROR();
 
-		quadtree_update_view(qt, mv, proj, viewport);
+		matrix_multiply(&proj, &mv, &combined);
+
+		quadtree_update_view(qt, &combined);
 	}
 
 
@@ -548,19 +547,7 @@ static const GLubyte gradient[] = {
 	0xf4, 0xf5, 0xf4,
 };
 
-static void normalize(float *f, int n)
-{
-	float mag = 0;
-
-	for(int i = 0; i < n; i++)
-		mag += f[i] * f[i];
-
-	mag = 1 / sqrtf(mag);
-	for(int i = 0; i < n; i++)
-		f[i] *= mag;
-}
-
-static elevation_t generate(long x, long y, long z, GLubyte col[4])
+static elevation_t generate(const vec3_t *v, GLubyte col[4])
 {
 	float height;
 	elevation_t e;
@@ -569,16 +556,17 @@ static elevation_t generate(long x, long y, long z, GLubyte col[4])
 
 	int idx;
 #if 0
-	height = (cos((float) x * M_PI * 2 / RADIUS) + 
-		  sin((float) y * M_PI * 2 / (RADIUS*2)) +
-		  sin((float) z * M_PI * 2 / (RADIUS*.5))*1.1);
+	height = (cos(v->x * M_PI * 2 / RADIUS) + 
+		  sin(v->y * M_PI * 2 / (RADIUS*2)) +
+		  sin(v->z * M_PI * 2 / (RADIUS*.5))*1.1);
 	idx = (height / 3) * 255 + 150;
 	e = height * (RADIUS * .02);
 #else
-	float v[3] = { x, y, z };
-	normalize(v, 3);
+	vec3_t nv = *v;
 
-	height = fractal_fBmtest(frac, v, 8);
+	vec3_normalize(&nv);
+
+	height = fractal_fBmtest(frac, nv.v, 8);
 
 	//printf("height(%g, %g, %g) = %g, variance=%g\n", v[0], v[1], v[2], height, variance);
 	idx = ((height * .5f) + .5f) * 255;

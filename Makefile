@@ -1,11 +1,12 @@
-CFLAGS=-Wall -g -std=gnu99 
+CFLAGS=-Wall -g -std=gnu99 # -O4 -msse -msse2 -mfpmath=sse
 
-test: test.o quadtree.o patchidx.o noise.o
-	$(CC) -o $@ test.o quadtree.o patchidx.o noise.o -lglut
+test: test.o quadtree.o patchidx.o noise.o geom.o
+	$(CC) -o $@ test.o quadtree.o patchidx.o noise.o geom.o -lglut
 
-test.o: quadtree.h font.h
-quadtree.o: quadtree.h
+test.o: quadtree.h font.h noise.h geom.h
+quadtree.o: quadtree.h geom.h
 noise.o: noise.h
+geom.o: geom.h
 
 font.h: msx
 	./msx > font.h

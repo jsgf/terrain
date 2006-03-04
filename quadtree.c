@@ -5,6 +5,8 @@
 #include <stdio.h>
 #include <math.h>
 
+#include "geom.h"
+
 #define GL_GLEXT_PROTOTYPES
 #include <GL/gl.h>
 #include <GL/glext.h>
@@ -48,6 +50,17 @@ static inline int clamp(int x, int lower, int upper)
 		x = lower;
 	return x;
 }
+
+static void project_to_sphere(int radius,
+			      long x, long y, long z,
+			      vec3_t *out)
+{
+	*out = VEC3(x, y, z);
+
+	vec3_normalize(out);
+	vec3_scale(out, radius);
+}
+
 
 /* The ID is an integer which uniquely identifies all nodes in the
    quadtree.  It uses 2 bits per level. */
@@ -545,6 +558,63 @@ static void patch_remove_freelist(struct quadtree *qt, struct patch *p)
 	qt->nfree--;
 }
 
+static void compute_bbox(const struct quadtree *qt, struct patch *p)
+{
+	vec3_t sph[8];
+	long radius = qt->radius;
+
+	if (p->z0 == p->z1) {
+		long size = abs(p->x0 - p->x1);
+
+		project_to_sphere(radius, p->x0, p->y0, p->z0 - size, &sph[0]);
+		project_to_sphere(radius, p->x1, p->y0, p->z0 - size, &sph[1]);
+		project_to_sphere(radius, p->x1, p->y1, p->z0 - size, &sph[2]);
+		project_to_sphere(radius, p->x0, p->y1, p->z0 - size, &sph[3]);
+
+		project_to_sphere(radius, p->x0, p->y0, p->z0 + size, &sph[4]);
+		project_to_sphere(radius, p->x1, p->y0, p->z0 + size, &sph[5]);
+		project_to_sphere(radius, p->x1, p->y1, p->z0 + size, &sph[6]);
+		project_to_sphere(radius, p->x0, p->y1, p->z0 + size, &sph[7]);
+	} else if (p->y0 == p->y1) {
+		long size = abs(p->x0 - p->x1);
+
+		project_to_sphere(radius, p->x0, p->y0 - size, p->z0, &sph[0]);
+		project_to_sphere(radius, p->x1, p->y0 - size, p->z0, &sph[1]);
+		project_to_sphere(radius, p->x1, p->y0 - size, p->z1, &sph[2]);
+		project_to_sphere(radius, p->x0, p->y0 - size, p->z1, &sph[3]);
+
+		project_to_sphere(radius, p->x0, p->y0 + size, p->z0, &sph[4]);
+		project_to_sphere(radius, p->x1, p->y0 + size, p->z0, &sph[5]);
+		project_to_sphere(radius, p->x1, p->y0 + size, p->z1, &sph[6]);
+		project_to_sphere(radius, p->x0, p->y0 + size, p->z1, &sph[7]);
+	} else if (p->x0 == p->x1) {
+		long size = abs(p->y0 - p->y1);
+
+		project_to_sphere(radius, p->x0 - size, p->y0, p->z0, &sph[0]);
+		project_to_sphere(radius, p->x0 - size, p->y1, p->z0, &sph[1]);
+		project_to_sphere(radius, p->x0 - size, p->y1, p->z1, &sph[2]);
+		project_to_sphere(radius, p->x0 - size, p->y0, p->z1, &sph[3]);
+
+		project_to_sphere(radius, p->x0 + size, p->y0, p->z0, &sph[4]);
+		project_to_sphere(radius, p->x0 + size, p->y1, p->z0, &sph[5]);
+		project_to_sphere(radius, p->x0 + size, p->y1, p->z1, &sph[6]);
+		project_to_sphere(radius, p->x0 + size, p->y0, p->z1, &sph[7]);
+	} else
+		abort();
+
+	p->bbox.centre = VEC3(0,0,0);
+	for(int i = 0; i < 8; i++)
+		vec3_add(&p->bbox.centre, &p->bbox.centre, &sph[i]);
+	vec3_scale(&p->bbox.centre, 1./8);
+
+	p->bbox.size = VEC3(0,0,0);
+	for(int i = 0; i < 8; i++) {
+		vec3_t d;
+		vec3_sub(&d, &p->bbox.centre, &sph[i]);
+		vec3_abs(&d);
+		vec3_max(&p->bbox.size, &p->bbox.size, &d);
+	}
+}
 
 /* Merge a specific patch. 
 
@@ -676,6 +746,8 @@ static int patch_merge(struct quadtree *qt, struct patch *p)
 		parent->y1 = sib[2]->y1;
 		parent->z0 = sib[0]->z0;
 		parent->z1 = sib[2]->z1;
+
+		compute_bbox(qt, parent);
 	}
 	parent->priority = 0;
 	parent->flags |= PF_VISITED;
@@ -893,6 +965,9 @@ static int patch_split(struct quadtree *qt, struct patch *parent)
 	} else
 		abort();
 
+	for(int i = 0; i < 4; i++)
+		compute_bbox(qt, k[i]);
+
 	for(enum patch_neighbour dir = 0; dir < 8; dir++) {
 		assert(parent->neigh[dir]->pinned);
 		parent->neigh[dir]->pinned--;
@@ -924,7 +999,7 @@ static int patch_split(struct quadtree *qt, struct patch *parent)
 }
 
 struct quadtree *quadtree_create(int num_patches, long radius, 
-				 elevation_t (*generator)(long x, long y, long z, GLubyte col[4]))
+				 elevation_t (*generator)(const vec3_t *v, GLubyte col[4]))
 {
 	struct quadtree *qt = NULL;
 
@@ -1084,6 +1159,8 @@ struct quadtree *quadtree_create(int num_patches, long radius,
 			b->neigh[j * 2 + 1] = basis[c->neigh[j]];
 		}
 
+		compute_bbox(qt, b);
+
 		patch_insert_active(qt, b);
 	}
 
@@ -1092,21 +1169,6 @@ struct quadtree *quadtree_create(int num_patches, long radius,
   out: 
 	free(qt);
 	return NULL;
-}
-
-static void project_to_sphere(int radius,
-			      long x, long y, long z,
-			      long *ox, long *oy, long *oz)
-{
-	float xf = (float)x;
-	float yf = (float)y;
-	float zf = (float)z;
-
-	float len = radius / sqrtf(xf*xf + yf*yf + zf*zf);
-
-	*ox = xf * len;
-	*oy = yf * len;
-	*oz = zf * len;
 }
 
 static inline unsigned outcode(int x, int y, const int viewport[4])
@@ -1123,154 +1185,56 @@ static inline unsigned outcode(int x, int y, const int viewport[4])
 
 static void update_prio(struct patch *p,
 			long radius,
-			const double dmv[16],
-			const double dproj[16],
-			const int viewport[4])
+			const matrix_t *mat,
+			plane_t frustum[6])
 {
-	struct {
-		long x,y,z;
-	} sph[4];
-	struct {
-		GLdouble x, y, z;
-	} proj[4];
-	int oc_or, oc_and;
+	p->flags &= ~PF_CULLED;
+	p->priority = 0;
 
-	if (p->z0 == p->z1 ||
-	    p->y0 == p->y1) {
-		project_to_sphere(radius, p->x0, p->y0, p->z0,
-				  &sph[0].x, &sph[0].y, &sph[0].z);
-		project_to_sphere(radius, p->x1, p->y0, p->z0,
-				  &sph[1].x, &sph[1].y, &sph[1].z);
-		project_to_sphere(radius, p->x1, p->y1, p->z1,
-				  &sph[2].x, &sph[2].y, &sph[2].z);
-		project_to_sphere(radius, p->x0, p->y1, p->z1,
-				  &sph[3].x, &sph[3].y, &sph[3].z);
+	if (box_cull(&p->bbox, frustum, 6) == CULL_OUT) {
+		p->flags |= PF_CULLED;
 	} else {
-		project_to_sphere(radius, p->x0, p->y0, p->z0,
-				  &sph[0].x, &sph[0].y, &sph[0].z);
-		project_to_sphere(radius, p->x1, p->y1, p->z0,
-				  &sph[1].x, &sph[1].y, &sph[1].z);
-		project_to_sphere(radius, p->x0, p->y1, p->z1,
-				  &sph[2].x, &sph[2].y, &sph[2].z);
-		project_to_sphere(radius, p->x0, p->y0, p->z1,
-				  &sph[3].x, &sph[3].y, &sph[3].z);
-	}
+		vec3_t sph[4];
+		vec3_t proj[4];
 
-	/* This performs two culling tests:
-	   - if the area is < 0, then the patch is back-facing, and is
-	     therefore culled,
-	   - if the projected patch quad is trivially rejectable as
-	     off-screen, it is culled.
-
-	   TODO:
-	   These tests are pretty bogus because they operate on the
-	   flat patch quad without taking into account the shape of
-	   the patch's geometry.  They should test against a full
-	   bounding-box.
-
-	   Instead of looking at backfacing patches, a more useful
-	   cull test is to see if the patch is over the horizion or
-	   not.
-	 */
-
-	oc_or = 0;
-	oc_and = ~0;
-
-	for(int i = 0; i < 4; i++) {
-		gluProject(sph[i].x, sph[i].y, sph[i].z,
-			   dmv, dproj, viewport,
-			   &proj[i].x, &proj[i].y, &proj[i].z);
-		unsigned oc = outcode(proj[i].x, proj[i].y, viewport);
-
-		oc_or |= oc;
-		oc_and &= oc;
-	}
-
-	float area = 0.f;
-
-	for(unsigned i = 0; i < 4; i++) {
-		unsigned n = (i+1) % 4;
-		area += (proj[i].x * proj[n].y) - (proj[n].x * proj[i].y);
-	}
-
-	area *= 0.5f;
-	area /= viewport[2] * viewport[3];
-
-	if (area > 0.f && (oc_or && oc_and)) {
-		/* culled by being off-screen; compute "area" as
-		   proportional to distance from screen centre */
-		int sx = viewport[0] + viewport[2]/2;
-		int sy = viewport[1] + viewport[3]/2;
-		float px = 0, py = 0;
-
-		for(int i = 0; i < 4; i++) {
-			px += proj[i].x;
-			py += proj[i].y;
+		if (p->z0 == p->z1 ||
+		    p->y0 == p->y1) {
+			project_to_sphere(radius, p->x0, p->y0, p->z0, &sph[0]);
+			project_to_sphere(radius, p->x1, p->y0, p->z0, &sph[1]);
+			project_to_sphere(radius, p->x1, p->y1, p->z1, &sph[2]);
+			project_to_sphere(radius, p->x0, p->y1, p->z1, &sph[3]);
+		} else {
+			project_to_sphere(radius, p->x0, p->y0, p->z0, &sph[0]);
+			project_to_sphere(radius, p->x0, p->y1, p->z0, &sph[1]);
+			project_to_sphere(radius, p->x0, p->y1, p->z1, &sph[2]);
+			project_to_sphere(radius, p->x0, p->y0, p->z1, &sph[3]);
 		}
-		px /= 4;
-		py /= 4;
 
-		area = hypotf(px - sx, py - sy) / hypotf(viewport[2], viewport[3]);
-		p->flags |= PF_CULLED;
+		for(int i = 0; i < 4; i++)
+			matrix_transform(mat, &sph[i], &proj[i]);
 
-		//printf("prio %s %d clipped\n", patch_name(p, buf), (int)(area*255.f));
-	} else if (area <= 0.f) {
-		/* culled because its backfacing */
-		area = fabsf(area);
-		area += p->level * .5f;
-		p->flags |= PF_CULLED;
+		float area = 0.f;
 
-		//printf("prio %s %d backface\n", patch_name(p, buf), (int)(area*255.f));
+		for(unsigned i = 0; i < 4; i++) {
+			unsigned n = (i+1) % 4;
+			area += (proj[i].x * proj[n].y) - (proj[n].x * proj[i].y);
+		}
+
+		area *= 0.5f;
+
+		if (area > 0)
+			p->priority = area;
+		else
+			p->flags |= PF_CULLED;
 	}
-	p->priority = 255 * area;//clamp(255 * area, 0, 255);
-
-#if 0
-	glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT);
-	glColor3f(1,1,1);
-	glDisable(GL_BLEND);
-	glDisable(GL_TEXTURE_2D);
-	glDisable(GL_DEPTH_TEST);
-
-	glMatrixMode(GL_PROJECTION);
-	glPushMatrix();
-	glLoadIdentity();
-	glOrtho(viewport[0], viewport[0]+viewport[2], viewport[1], viewport[1]+viewport[3], 0, 1);
-	glMatrixMode(GL_MODELVIEW);
-	glPushMatrix();
-	glLoadIdentity();
-
-	glBegin(GL_LINE_LOOP);
-	for(int i = 0; i < 4; i++)
-		glVertex2d(proj[i].x, proj[i].y);
-	glEnd();
-	glMatrixMode(GL_PROJECTION);
-	glPopMatrix();
-	glMatrixMode(GL_MODELVIEW);
-	glPopMatrix();
-	glPopAttrib();
-#endif
 }
 
 static void generate_geom(struct quadtree *qt);
 
-void quadtree_update_view(struct quadtree *qt, 
-			  const float modelview[16],
-			  const float projection[16],
-			  const int viewport[4])
+void quadtree_update_view(struct quadtree *qt, const matrix_t *mat)
 {
 	char buf[40];
-	const double dmv[16] = { 
-		modelview[ 0], modelview[ 1], modelview[ 2], modelview[ 3],
-		modelview[ 4], modelview[ 5], modelview[ 6], modelview[ 7],
-		modelview[ 8], modelview[ 9], modelview[10], modelview[11],
-		modelview[12], modelview[13], modelview[14], modelview[15],
-	};
-	const double dproj[16] = { 
-		projection[ 0], projection[ 1], projection[ 2], projection[ 3],
-		projection[ 4], projection[ 5], projection[ 6], projection[ 7],
-		projection[ 8], projection[ 9], projection[10], projection[11],
-		projection[12], projection[13], projection[14], projection[15],
-	};
+	plane_t frustum[6];
 
 	/* remove all active patches into a local list */
 	struct list_head local, *pp, *pnext;
@@ -1279,6 +1243,46 @@ void quadtree_update_view(struct quadtree *qt,
 	list_splice_init(&qt->culled, &local);
 	qt->nactive = 0;
 	qt->nvisible = 0;
+
+	plane_extract(mat, frustum);
+	for(int i = 0; i < 6; i++)
+		plane_normalize(&frustum[i]);
+
+
+	if (1) {
+		static const float col[] = {
+			0,0,1,	/* blue - left */
+			0,1,0,	/* green - right */
+			1,0,0,	/* red - top */
+			1,0,1,	/* magenta - bottom */
+			1,1,0,	/* yellow - near */
+			1,1,1,	/* white - far */
+		};
+
+		glPushAttrib(GL_ENABLE_BIT);
+		glDisable(GL_LIGHTING);
+		glDisable(GL_TEXTURE_2D);
+
+		glBegin(GL_LINES);
+		for(int i = 0; i < 6; i++) {
+			vec3_t v = frustum[i].normal;
+
+			/* scale and flip to be vector from origin
+			   rather than normal vector */
+			vec3_scale(&v, -frustum[i].dist);
+
+			glColor3fv(&col[i * 3]);
+
+			glVertex3fv(v.v);
+
+			/* draw partial length so that all sides have
+			   some chance of being seen */
+			vec3_scale(&v, .75);
+			glVertex3fv(v.v);
+		}
+		glEnd();
+		glPopAttrib();
+	}
 
 	/* Project each patch using the view matrix, and compute the
 	   projected area. Use this to generate the priority for each
@@ -1290,7 +1294,7 @@ void quadtree_update_view(struct quadtree *qt,
 
 		p->flags &= ~(PF_VISITED | PF_CULLED | PF_ACTIVE);
 
-		update_prio(p, qt->radius, dmv, dproj, viewport);
+		update_prio(p, qt->radius, mat, frustum);
 
 		patch_insert_active(qt, p);
 	}
@@ -1366,34 +1370,6 @@ void quadtree_update_view(struct quadtree *qt,
 	generate_geom(qt);
 }
 
-static void vec3_cross(float out[3], const float a[3], const float b[3])
-{
-	out[0] = a[1] * b[2] - a[2] * b[1];
-	out[1] = a[2] * b[0] - a[0] * b[2];
-	out[2] = a[0] * b[1] - a[1] * b[0];	
-}
-
-static void vec3_normalize(float v[3])
-{
-	float len = sqrtf(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
-
-	if (len < 1.e-5)
-		return;
-
-	len = 1.f / len;
-
-	for(int i = 0; i < 3; i++) {
-		v[i] *= len;
-		if (v[i] > 1.f)
-			v[i] = 1.f;
-	}
-}
-
-static float vec3_dot(const float a[3], const float b[3])
-{
-	return a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
-}
-
 /* Return the a classification of a patch's neighbours to determine
    which need special handling in generating a mesh.  The return is an
    index into patch_indices[], and must match genpatchidx.c. */
@@ -1418,23 +1394,26 @@ static void set_vertex(struct quadtree *qt, struct vertex *v,
 		       int i, int j,
 		       long x, long y, long z)
 {
-	long ox, oy, oz;
+	vec3_t ov, ev;
 	elevation_t elev;
 
 	project_to_sphere(qt->radius,
 			  x, y, z,
-			  &ox, &oy, &oz);
+			  &ov);
 					
-	elev = (*qt->landscape)(ox, oy, oz, v->col);
+	elev = (*qt->landscape)(&ov, v->col);
 
-	float d = 1.f / sqrtf((float)ox*ox + (float)oy*oy + (float)oz*oz);
+	ev = ov;
+	vec3_normalize(&ev);
+	vec3_scale(&ev, elev);
+	vec3_add(&ev, &ev, &ov);
 
 	v->s = i;					
 	v->t = PATCH_SAMPLES - j;
 
-	v->x = ox + d * elev * ox;
-	v->y = oy + d * elev * oy;
-	v->z = oz + d * elev * oz;
+	v->x = ev.x;
+	v->y = ev.y;
+	v->z = ev.z;
 }
 
 static void generate_geom(struct quadtree *qt)
@@ -1519,19 +1498,20 @@ static void generate_geom(struct quadtree *qt)
 				struct vertex *v = &samples[y * MESH_SAMPLES + x];
 				struct vertex *vx = &samples[y * MESH_SAMPLES + x + 1];
 				struct vertex *vy = &samples[(y+1) * MESH_SAMPLES + x];
-				float vecx[3] = { vx->x - v->x,
-						  vx->y - v->y,
-						  vx->z - v->z };
-				float vecy[3] = { vy->x - v->x,
-						  vy->y - v->y,
-						  vy->z - v->z };
-				float cross[3];
-				vec3_cross(cross, vecx, vecy);
-				vec3_normalize(cross);
+				vec3_t vecx = VEC3(vx->x - v->x,
+						   vx->y - v->y,
+						   vx->z - v->z);
+				vec3_t vecy = VEC3(vy->x - v->x,
+						   vy->y - v->y,
+						   vy->z - v->z);
+				vec3_t cross;
 
-				v->nx = cross[0] * 127;
-				v->ny = cross[1] * 127;
-				v->nz = cross[2] * 127;
+				vec3_cross(&cross, &vecx, &vecy);
+				vec3_normalize(&cross);
+
+				v->nx = cross.x * 127;
+				v->ny = cross.y * 127;
+				v->nz = cross.z * 127;
 			}
 		}
 
@@ -1645,6 +1625,56 @@ void quadtree_render(const struct quadtree *qt, void (*prerender)(const struct p
 				     VERTICES_PER_PATCH);
 		GLERROR();
 	}
+
+	glPushAttrib(GL_ENABLE_BIT);
+	glDisable(GL_LIGHTING);
+	glDisable(GL_TEXTURE_2D);
+
+	glColor3f(1,0,0);
+	glBegin(GL_LINES);
+	list_for_each(pp, &qt->culled) {
+		const struct patch *p = list_entry(pp, struct patch, list);
+		const box_t *b = &p->bbox;
+
+		glVertex3f(b->centre.x - b->size.x, b->centre.y - b->size.y, b->centre.z - b->size.z);
+		glVertex3f(b->centre.x - b->size.x, b->centre.y - b->size.y, b->centre.z + b->size.z);
+
+		glVertex3f(b->centre.x - b->size.x, b->centre.y - b->size.y, b->centre.z - b->size.z);
+		glVertex3f(b->centre.x - b->size.x, b->centre.y + b->size.y, b->centre.z - b->size.z);
+
+		glVertex3f(b->centre.x - b->size.x, b->centre.y - b->size.y, b->centre.z - b->size.z);
+		glVertex3f(b->centre.x + b->size.x, b->centre.y - b->size.y, b->centre.z - b->size.z);
+
+
+		glVertex3f(b->centre.x + b->size.x, b->centre.y + b->size.y, b->centre.z + b->size.z);
+		glVertex3f(b->centre.x + b->size.x, b->centre.y + b->size.y, b->centre.z - b->size.z);
+
+		glVertex3f(b->centre.x + b->size.x, b->centre.y + b->size.y, b->centre.z + b->size.z);
+		glVertex3f(b->centre.x + b->size.x, b->centre.y - b->size.y, b->centre.z + b->size.z);
+
+		glVertex3f(b->centre.x + b->size.x, b->centre.y + b->size.y, b->centre.z + b->size.z);
+		glVertex3f(b->centre.x - b->size.x, b->centre.y + b->size.y, b->centre.z + b->size.z);
+
+		glVertex3f(b->centre.x + b->size.x, b->centre.y - b->size.y, b->centre.z - b->size.z);
+		glVertex3f(b->centre.x + b->size.x, b->centre.y - b->size.y, b->centre.z + b->size.z);
+
+		glVertex3f(b->centre.x + b->size.x, b->centre.y - b->size.y, b->centre.z + b->size.z);
+		glVertex3f(b->centre.x - b->size.x, b->centre.y - b->size.y, b->centre.z + b->size.z);
+
+		glVertex3f(b->centre.x - b->size.x, b->centre.y - b->size.y, b->centre.z + b->size.z);
+		glVertex3f(b->centre.x - b->size.x, b->centre.y + b->size.y, b->centre.z + b->size.z);
+
+		glVertex3f(b->centre.x - b->size.x, b->centre.y + b->size.y, b->centre.z + b->size.z);
+		glVertex3f(b->centre.x - b->size.x, b->centre.y + b->size.y, b->centre.z - b->size.z);
+
+		glVertex3f(b->centre.x - b->size.x, b->centre.y + b->size.y, b->centre.z - b->size.z);
+		glVertex3f(b->centre.x + b->size.x, b->centre.y + b->size.y, b->centre.z - b->size.z);
+
+		glVertex3f(b->centre.x + b->size.x, b->centre.y + b->size.y, b->centre.z - b->size.z);
+		glVertex3f(b->centre.x + b->size.x, b->centre.y - b->size.y, b->centre.z - b->size.z);
+	}
+	glEnd();
+	glPopAttrib();
 
 	if (have_vbo) {
 		glBindBuffer(GL_ARRAY_BUFFER, 0);

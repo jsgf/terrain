@@ -2,6 +2,7 @@
 #define QUADTREE_H
 
 #include "list.h"
+#include "geom.h"
 
 /* 
    A patch is a node in the quadtree.  The tree starts with N root
@@ -53,11 +54,8 @@ struct patch;
 typedef long elevation_t;	/* basic sample type of a heightfield */
 
 struct quadtree *quadtree_create(int num_patches, long radius,
-				 elevation_t (*generator)(long x, long y, long z, GLubyte colour[4]));
-void quadtree_update_view(struct quadtree *qt, 
-			  const float modelview[16],
-			  const float projection[16],
-			  const int viewport[4]);
+				 elevation_t (*generator)(const vec3_t *v, GLubyte colour[4]));
+void quadtree_update_view(struct quadtree *qt, const matrix_t *mat);
 void quadtree_render(const struct quadtree *qt, void (*prerender)(const struct patch *p));
 
 int patch_level(const struct patch *p);

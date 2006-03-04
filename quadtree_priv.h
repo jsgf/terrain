@@ -62,6 +62,8 @@ struct patch {
 	   but the patch is parallel to one of the axies. */
 	signed int x0, x1, y0, y1, z0, z1;
 
+	box_t bbox;
+
 	/* The parent-child links are not really used as part of the
 	   quadtree structure, since the parent is replaced by the
 	   children on split.  But on split/merge the old
@@ -150,7 +152,7 @@ struct quadtree {
 	   generate elevation for a particular point on its
 	   surface. */
 	long radius;
-	elevation_t (*landscape)(long x, long y, long z, GLubyte col[4]);
+	elevation_t (*landscape)(const vec3_t *v, GLubyte col[4]);
 };
 
 #endif	/* _QUADTREE_PRIV_H */
