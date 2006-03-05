@@ -142,10 +142,10 @@ static void display()
 
 	if (update_view) {
 		matrix_t mv, proj, combined;
-		vec3_t camdir = VEC3(0,0,-1);
+		vec3_t camdir = VEC3(0,0,-dolly);
 
 		/* surely this can be prettier... */
-		{
+		if (1) {
 			matrix_t rot = MATRIX_IDENT;
 			float c,s;
 
@@ -167,6 +167,8 @@ static void display()
 		GLERROR();
 
 		matrix_multiply(&proj, &mv, &combined);
+
+		//printf("camerapos=%g, %g, %g, alt=%g\n", camdir.x, camdir.y, camdir.z, vec3_magnitude(&camdir));
 
 		quadtree_update_view(qt, &combined, &camdir);
 	}

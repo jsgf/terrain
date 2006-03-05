@@ -1236,11 +1236,33 @@ void quadtree_update_view(struct quadtree *qt, const matrix_t *mat, const vec3_t
 	/* get the view frustum in object space */
 	plane_extract(mat, cullplanes);
 
-	/* set the horizion cull plane at 90% the radius of the
-	   sphere, so that tall mountains over the horizion aren't
-	   culled */
-	cullplanes[6].normal = *camerapos;
-	cullplanes[6].dist = -qt->radius * .9f * .70710678118654752440f; /* sqrt(1/2) */
+	{
+		/* Compute the horizion cull plane.  The plane's
+		  normal is the same direction as the camera's
+		  position vector.  The distance depends on the
+		  camera's altitude. */
+		plane_t *h = &cullplanes[6];
+		float alt = vec3_magnitude(camerapos);
+		float radius = qt->radius;
+
+		radius *= .97;
+
+		h->normal = *camerapos;
+		vec3_normalize(&h->normal);
+
+		if (alt <= radius) {
+			/* if the camera appears to be inside the
+			   planet, just split the difference */
+			h->dist = alt / 2;
+		} else {
+			/* Find inverse of camera point P with respect
+			   to the sphere.  The plane is formed where
+			   the tangents from tne camera meet the
+			   sphere. */
+			h->dist = (radius*radius) / alt;
+		}
+		h->dist = -h->dist;
+	}
 
 	for(int i = 0; i < 7; i++)
 		plane_normalize(&cullplanes[i]);
@@ -1334,7 +1356,7 @@ void quadtree_update_view(struct quadtree *qt, const matrix_t *mat, const vec3_t
 		if (p->flags & PF_VISITED)
 			continue;
 
-		if (p->level < 4 && p->priority >= (255 * MAXSIZE / 100)) {
+		if (p->level < 3 && p->priority >= (255 * MAXSIZE / 100)) {
 			p->flags |= PF_VISITED;
 			
 			if (DEBUG)
