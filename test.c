@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+
 #include <GL/glut.h>
 #include <assert.h>
 #include <stdio.h>
@@ -140,6 +142,24 @@ static void display()
 
 	if (update_view) {
 		matrix_t mv, proj, combined;
+		vec3_t camdir = VEC3(0,0,-1);
+
+		/* surely this can be prettier... */
+		{
+			matrix_t rot = MATRIX_IDENT;
+			float c,s;
+
+			sincosf(-elevation * M_PI / 180.f, &s, &c);
+			rot._22 = c; rot._23 = -s;
+			rot._32 = s; rot._33 = c;
+			matrix_transform(&rot, &camdir, &camdir);
+
+			sincosf(-bearing * M_PI / 180.f, &s, &c);
+			rot = MATRIX_IDENT;
+			rot._11 = c; rot._13 = s;
+			rot._31 = -s; rot._33 = c;
+			matrix_transform(&rot, &camdir, &camdir);
+		}
 
 		glGetFloatv(GL_MODELVIEW_MATRIX, mv.m);
 		GLERROR();
@@ -148,7 +168,7 @@ static void display()
 
 		matrix_multiply(&proj, &mv, &combined);
 
-		quadtree_update_view(qt, &combined);
+		quadtree_update_view(qt, &combined, &camdir);
 	}
 
 

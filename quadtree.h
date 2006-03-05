@@ -55,7 +55,7 @@ typedef long elevation_t;	/* basic sample type of a heightfield */
 
 struct quadtree *quadtree_create(int num_patches, long radius,
 				 elevation_t (*generator)(const vec3_t *v, GLubyte colour[4]));
-void quadtree_update_view(struct quadtree *qt, const matrix_t *mat);
+void quadtree_update_view(struct quadtree *qt, const matrix_t *mat, const vec3_t *camerapos);
 void quadtree_render(const struct quadtree *qt, void (*prerender)(const struct patch *p));
 
 int patch_level(const struct patch *p);

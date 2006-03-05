@@ -30,7 +30,7 @@ typedef struct plane {
 
 typedef struct box {
 	vec3_t centre;
-	vec3_t size;
+	vec3_t extent;
 } box_t;
 
 typedef union matrix {

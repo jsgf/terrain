@@ -16,6 +16,7 @@
 #include "quadtree_priv.h"
 
 static const int DEBUG = 0;
+static const int ANNOTATE = 0;
 
 static int have_vbo = -1;
 static int have_cva = -1;
@@ -564,7 +565,8 @@ static void compute_bbox(const struct quadtree *qt, struct patch *p)
 	long radius = qt->radius;
 
 	if (p->z0 == p->z1) {
-		long size = abs(p->x0 - p->x1);
+		long size = abs(p->x0 - p->x1) / 2;
+		assert(size == abs(p->y0 - p->y1) / 2);
 
 		project_to_sphere(radius, p->x0, p->y0, p->z0 - size, &sph[0]);
 		project_to_sphere(radius, p->x1, p->y0, p->z0 - size, &sph[1]);
@@ -576,7 +578,8 @@ static void compute_bbox(const struct quadtree *qt, struct patch *p)
 		project_to_sphere(radius, p->x1, p->y1, p->z0 + size, &sph[6]);
 		project_to_sphere(radius, p->x0, p->y1, p->z0 + size, &sph[7]);
 	} else if (p->y0 == p->y1) {
-		long size = abs(p->x0 - p->x1);
+		long size = abs(p->x0 - p->x1) / 2;
+		assert(size == abs(p->z0 - p->z1) / 2);
 
 		project_to_sphere(radius, p->x0, p->y0 - size, p->z0, &sph[0]);
 		project_to_sphere(radius, p->x1, p->y0 - size, p->z0, &sph[1]);
@@ -588,7 +591,8 @@ static void compute_bbox(const struct quadtree *qt, struct patch *p)
 		project_to_sphere(radius, p->x1, p->y0 + size, p->z1, &sph[6]);
 		project_to_sphere(radius, p->x0, p->y0 + size, p->z1, &sph[7]);
 	} else if (p->x0 == p->x1) {
-		long size = abs(p->y0 - p->y1);
+		long size = abs(p->y0 - p->y1) / 2;
+		assert(size == abs(p->z0 - p->z1) / 2);
 
 		project_to_sphere(radius, p->x0 - size, p->y0, p->z0, &sph[0]);
 		project_to_sphere(radius, p->x0 - size, p->y1, p->z0, &sph[1]);
@@ -607,12 +611,12 @@ static void compute_bbox(const struct quadtree *qt, struct patch *p)
 		vec3_add(&p->bbox.centre, &p->bbox.centre, &sph[i]);
 	vec3_scale(&p->bbox.centre, 1./8);
 
-	p->bbox.size = VEC3(0,0,0);
+	p->bbox.extent = VEC3(0,0,0);
 	for(int i = 0; i < 8; i++) {
 		vec3_t d;
 		vec3_sub(&d, &p->bbox.centre, &sph[i]);
 		vec3_abs(&d);
-		vec3_max(&p->bbox.size, &p->bbox.size, &d);
+		vec3_max(&p->bbox.extent, &p->bbox.extent, &d);
 	}
 }
 
@@ -1171,27 +1175,15 @@ struct quadtree *quadtree_create(int num_patches, long radius,
 	return NULL;
 }
 
-static inline unsigned outcode(int x, int y, const int viewport[4])
-{
-	unsigned ret = 0;
-
-	ret |= (x < viewport[0]) << 0;
-	ret |= (x >= viewport[0]+viewport[2]) << 1;
-	ret |= (y < viewport[1]) << 2;
-	ret |= (y >= viewport[1]+viewport[3]) << 3;
-
-	return ret;
-}
-
 static void update_prio(struct patch *p,
 			long radius,
 			const matrix_t *mat,
-			plane_t frustum[6])
+			plane_t cullplanes[7])
 {
 	p->flags &= ~PF_CULLED;
 	p->priority = 0;
 
-	if (box_cull(&p->bbox, frustum, 6) == CULL_OUT) {
+	if (box_cull(&p->bbox, cullplanes, 7) == CULL_OUT) {
 		p->flags |= PF_CULLED;
 	} else {
 		vec3_t sph[4];
@@ -1222,19 +1214,16 @@ static void update_prio(struct patch *p,
 
 		area *= 0.5f;
 
-		if (area > 0)
-			p->priority = area;
-		else
-			p->flags |= PF_CULLED;
+		p->priority = fabsf(area);
 	}
 }
 
 static void generate_geom(struct quadtree *qt);
 
-void quadtree_update_view(struct quadtree *qt, const matrix_t *mat)
+void quadtree_update_view(struct quadtree *qt, const matrix_t *mat, const vec3_t *camerapos)
 {
 	char buf[40];
-	plane_t frustum[6];
+	plane_t cullplanes[7];	/* 6 frustum and 1 horizon */
 
 	/* remove all active patches into a local list */
 	struct list_head local, *pp, *pnext;
@@ -1244,12 +1233,20 @@ void quadtree_update_view(struct quadtree *qt, const matrix_t *mat)
 	qt->nactive = 0;
 	qt->nvisible = 0;
 
-	plane_extract(mat, frustum);
-	for(int i = 0; i < 6; i++)
-		plane_normalize(&frustum[i]);
+	/* get the view frustum in object space */
+	plane_extract(mat, cullplanes);
 
+	/* set the horizion cull plane at 90% the radius of the
+	   sphere, so that tall mountains over the horizion aren't
+	   culled */
+	cullplanes[6].normal = *camerapos;
+	cullplanes[6].dist = -qt->radius * .9f * .70710678118654752440f; /* sqrt(1/2) */
 
-	if (1) {
+	for(int i = 0; i < 7; i++)
+		plane_normalize(&cullplanes[i]);
+
+	if (ANNOTATE) {
+		/* display cull planes */
 		static const float col[] = {
 			0,0,1,	/* blue - left */
 			0,1,0,	/* green - right */
@@ -1257,6 +1254,7 @@ void quadtree_update_view(struct quadtree *qt, const matrix_t *mat)
 			1,0,1,	/* magenta - bottom */
 			1,1,0,	/* yellow - near */
 			1,1,1,	/* white - far */
+			0,1,1,	/* cyan - horizion */
 		};
 
 		glPushAttrib(GL_ENABLE_BIT);
@@ -1264,12 +1262,12 @@ void quadtree_update_view(struct quadtree *qt, const matrix_t *mat)
 		glDisable(GL_TEXTURE_2D);
 
 		glBegin(GL_LINES);
-		for(int i = 0; i < 6; i++) {
-			vec3_t v = frustum[i].normal;
+		for(int i = 0; i < 7; i++) {
+			vec3_t v = cullplanes[i].normal;
 
 			/* scale and flip to be vector from origin
 			   rather than normal vector */
-			vec3_scale(&v, -frustum[i].dist);
+			vec3_scale(&v, -cullplanes[i].dist);
 
 			glColor3fv(&col[i * 3]);
 
@@ -1294,7 +1292,7 @@ void quadtree_update_view(struct quadtree *qt, const matrix_t *mat)
 
 		p->flags &= ~(PF_VISITED | PF_CULLED | PF_ACTIVE);
 
-		update_prio(p, qt->radius, mat, frustum);
+		update_prio(p, qt->radius, mat, cullplanes);
 
 		patch_insert_active(qt, p);
 	}
@@ -1336,7 +1334,7 @@ void quadtree_update_view(struct quadtree *qt, const matrix_t *mat)
 		if (p->flags & PF_VISITED)
 			continue;
 
-		if (p->priority >= (255 * MAXSIZE / 100)) {
+		if (p->level < 4 && p->priority >= (255 * MAXSIZE / 100)) {
 			p->flags |= PF_VISITED;
 			
 			if (DEBUG)
@@ -1626,55 +1624,62 @@ void quadtree_render(const struct quadtree *qt, void (*prerender)(const struct p
 		GLERROR();
 	}
 
-	glPushAttrib(GL_ENABLE_BIT);
-	glDisable(GL_LIGHTING);
-	glDisable(GL_TEXTURE_2D);
+	if (ANNOTATE) {
+		glPushAttrib(GL_ENABLE_BIT);
+		glDisable(GL_LIGHTING);
+		glDisable(GL_TEXTURE_2D);
 
-	glColor3f(1,0,0);
-	glBegin(GL_LINES);
-	list_for_each(pp, &qt->culled) {
-		const struct patch *p = list_entry(pp, struct patch, list);
-		const box_t *b = &p->bbox;
+		list_for_each(pp, &qt->culled) {
+			const struct patch *p = list_entry(pp, struct patch, list);
+			const box_t *b = &p->bbox;
 
-		glVertex3f(b->centre.x - b->size.x, b->centre.y - b->size.y, b->centre.z - b->size.z);
-		glVertex3f(b->centre.x - b->size.x, b->centre.y - b->size.y, b->centre.z + b->size.z);
+			glColor3f(1,1,0);
+			glBegin(GL_POINTS);
+			glVertex3fv(b->centre.v);
+			glEnd();
 
-		glVertex3f(b->centre.x - b->size.x, b->centre.y - b->size.y, b->centre.z - b->size.z);
-		glVertex3f(b->centre.x - b->size.x, b->centre.y + b->size.y, b->centre.z - b->size.z);
+			glColor3f(1,0,0);
+			glBegin(GL_LINES);
+			glVertex3f(b->centre.x - b->extent.x, b->centre.y - b->extent.y, b->centre.z - b->extent.z);
+			glVertex3f(b->centre.x - b->extent.x, b->centre.y - b->extent.y, b->centre.z + b->extent.z);
 
-		glVertex3f(b->centre.x - b->size.x, b->centre.y - b->size.y, b->centre.z - b->size.z);
-		glVertex3f(b->centre.x + b->size.x, b->centre.y - b->size.y, b->centre.z - b->size.z);
+			glVertex3f(b->centre.x - b->extent.x, b->centre.y - b->extent.y, b->centre.z - b->extent.z);
+			glVertex3f(b->centre.x - b->extent.x, b->centre.y + b->extent.y, b->centre.z - b->extent.z);
+
+			glVertex3f(b->centre.x - b->extent.x, b->centre.y - b->extent.y, b->centre.z - b->extent.z);
+			glVertex3f(b->centre.x + b->extent.x, b->centre.y - b->extent.y, b->centre.z - b->extent.z);
 
 
-		glVertex3f(b->centre.x + b->size.x, b->centre.y + b->size.y, b->centre.z + b->size.z);
-		glVertex3f(b->centre.x + b->size.x, b->centre.y + b->size.y, b->centre.z - b->size.z);
+			glVertex3f(b->centre.x + b->extent.x, b->centre.y + b->extent.y, b->centre.z + b->extent.z);
+			glVertex3f(b->centre.x + b->extent.x, b->centre.y + b->extent.y, b->centre.z - b->extent.z);
 
-		glVertex3f(b->centre.x + b->size.x, b->centre.y + b->size.y, b->centre.z + b->size.z);
-		glVertex3f(b->centre.x + b->size.x, b->centre.y - b->size.y, b->centre.z + b->size.z);
+			glVertex3f(b->centre.x + b->extent.x, b->centre.y + b->extent.y, b->centre.z + b->extent.z);
+			glVertex3f(b->centre.x + b->extent.x, b->centre.y - b->extent.y, b->centre.z + b->extent.z);
 
-		glVertex3f(b->centre.x + b->size.x, b->centre.y + b->size.y, b->centre.z + b->size.z);
-		glVertex3f(b->centre.x - b->size.x, b->centre.y + b->size.y, b->centre.z + b->size.z);
+			glVertex3f(b->centre.x + b->extent.x, b->centre.y + b->extent.y, b->centre.z + b->extent.z);
+			glVertex3f(b->centre.x - b->extent.x, b->centre.y + b->extent.y, b->centre.z + b->extent.z);
 
-		glVertex3f(b->centre.x + b->size.x, b->centre.y - b->size.y, b->centre.z - b->size.z);
-		glVertex3f(b->centre.x + b->size.x, b->centre.y - b->size.y, b->centre.z + b->size.z);
+			glVertex3f(b->centre.x + b->extent.x, b->centre.y - b->extent.y, b->centre.z - b->extent.z);
+			glVertex3f(b->centre.x + b->extent.x, b->centre.y - b->extent.y, b->centre.z + b->extent.z);
 
-		glVertex3f(b->centre.x + b->size.x, b->centre.y - b->size.y, b->centre.z + b->size.z);
-		glVertex3f(b->centre.x - b->size.x, b->centre.y - b->size.y, b->centre.z + b->size.z);
+			glVertex3f(b->centre.x + b->extent.x, b->centre.y - b->extent.y, b->centre.z + b->extent.z);
+			glVertex3f(b->centre.x - b->extent.x, b->centre.y - b->extent.y, b->centre.z + b->extent.z);
 
-		glVertex3f(b->centre.x - b->size.x, b->centre.y - b->size.y, b->centre.z + b->size.z);
-		glVertex3f(b->centre.x - b->size.x, b->centre.y + b->size.y, b->centre.z + b->size.z);
+			glVertex3f(b->centre.x - b->extent.x, b->centre.y - b->extent.y, b->centre.z + b->extent.z);
+			glVertex3f(b->centre.x - b->extent.x, b->centre.y + b->extent.y, b->centre.z + b->extent.z);
 
-		glVertex3f(b->centre.x - b->size.x, b->centre.y + b->size.y, b->centre.z + b->size.z);
-		glVertex3f(b->centre.x - b->size.x, b->centre.y + b->size.y, b->centre.z - b->size.z);
+			glVertex3f(b->centre.x - b->extent.x, b->centre.y + b->extent.y, b->centre.z + b->extent.z);
+			glVertex3f(b->centre.x - b->extent.x, b->centre.y + b->extent.y, b->centre.z - b->extent.z);
 
-		glVertex3f(b->centre.x - b->size.x, b->centre.y + b->size.y, b->centre.z - b->size.z);
-		glVertex3f(b->centre.x + b->size.x, b->centre.y + b->size.y, b->centre.z - b->size.z);
+			glVertex3f(b->centre.x - b->extent.x, b->centre.y + b->extent.y, b->centre.z - b->extent.z);
+			glVertex3f(b->centre.x + b->extent.x, b->centre.y + b->extent.y, b->centre.z - b->extent.z);
 
-		glVertex3f(b->centre.x + b->size.x, b->centre.y + b->size.y, b->centre.z - b->size.z);
-		glVertex3f(b->centre.x + b->size.x, b->centre.y - b->size.y, b->centre.z - b->size.z);
+			glVertex3f(b->centre.x + b->extent.x, b->centre.y + b->extent.y, b->centre.z - b->extent.z);
+			glVertex3f(b->centre.x + b->extent.x, b->centre.y - b->extent.y, b->centre.z - b->extent.z);
+			glEnd();
+		}
+		glPopAttrib();
 	}
-	glEnd();
-	glPopAttrib();
 
 	if (have_vbo) {
 		glBindBuffer(GL_ARRAY_BUFFER, 0);

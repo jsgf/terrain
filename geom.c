@@ -75,9 +75,13 @@ void vec3_max(vec3_t *out, const vec3_t *a, const vec3_t *b)
 
 void matrix_transform(const matrix_t *m, const vec3_t *in, vec3_t *out)
 {
-	out->x = m->m[0] * in->x + m->m[4] * in->y + m->m[ 8] * in->z + m->m[12];
-	out->y = m->m[1] * in->x + m->m[5] * in->y + m->m[ 9] * in->z + m->m[13];
-	out->z = m->m[2] * in->x + m->m[6] * in->y + m->m[10] * in->z + m->m[14];
+	vec3_t t;
+
+	t.x = m->m[0] * in->x + m->m[4] * in->y + m->m[ 8] * in->z + m->m[12];
+	t.y = m->m[1] * in->x + m->m[5] * in->y + m->m[ 9] * in->z + m->m[13];
+	t.z = m->m[2] * in->x + m->m[6] * in->y + m->m[10] * in->z + m->m[14];
+
+	*out = t;
 }
 
 void matrix_multiply(const matrix_t *a, const matrix_t *b, matrix_t *out)
@@ -152,19 +156,21 @@ void plane_extract(const matrix_t *mat, plane_t planes[6])
 
 enum cull_result box_cull(const box_t *box, const plane_t *planes, int nplanes)
 {
+	int visible = 0;
+
 	for(int i = 0; i < nplanes; i++) {
 		const plane_t *p = &planes[i];
-		float d = vec3_dot(&p->normal, &box->centre) - p->dist;
-		float extent_toward_plane =
-			fabsf(box->size.x * p->normal.x) +
-			fabsf(box->size.y * p->normal.y) +
-			fabsf(box->size.z * p->normal.z);
+		float reff =
+			fabsf(box->extent.x * p->normal.x) +
+			fabsf(box->extent.y * p->normal.y) +
+			fabsf(box->extent.z * p->normal.z);
 
-		if (d < 0) {
-			if (-d > extent_toward_plane)
-				return CULL_OUT;
-		} else {
-			if (d > extent_toward_plane)
+		float dot = vec3_dot(&p->normal, &box->centre) + p->dist;
+
+		if (dot <= -reff)
+			return CULL_OUT;
+		else {
+			if (++visible == nplanes)
 				return CULL_IN;
 		}
 	}
