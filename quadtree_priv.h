@@ -91,12 +91,13 @@ struct patch {
 	unsigned char level;	/* level in quadtree */
 
 	unsigned flags;
-//#define PF_VISITED	(1<<0)	/* visited in this pass */
-#define PF_CULLED	(1<<1)	/* not visible */
-#define PF_UNUSED	(1<<2)	/* no valid contents */
-#define PF_ACTIVE	(1<<3)	/* active part of the structure */
-#define PF_UPDATE_GEOM	(1<<4)	/* geometry needs updating */
-#define PF_STITCH_GEOM	(1<<5)	/* geometry needs stitching */
+#define PF_CULLED	(1<<0)	/* not visible */
+#define PF_UNUSED	(1<<1)	/* no valid contents */
+#define PF_ACTIVE	(1<<2)	/* active part of the structure */
+#define PF_UPDATE_GEOM	(1<<3)	/* geometry needs updating */
+#define PF_STITCH_GEOM	(1<<4)	/* geometry needs stitching */
+
+#define PF_LATECULL	(1<<5)
 
 	int phase;
 

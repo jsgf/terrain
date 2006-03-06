@@ -676,8 +676,6 @@ static int patch_merge(struct quadtree *qt, struct patch *p,
 		return 0;
 	}
 
-	//p->flags |= PF_VISITED;
-
 	if (p->level == 0) {
 		printf("merge %s failed: level 0\n", patch_name(p, buf));
 		p->phase = qt->phase;
@@ -907,7 +905,7 @@ static int patch_split(struct quadtree *qt, struct patch *parent)
 		if (k[i]->flags & PF_CULLED) {
 			/* if culled, the kids have the same prio as
 			   the parent */
-			k[i]->priority = parent->priority * k[i]->level * .25f;
+			k[i]->priority = parent->priority;
 		} else {
 			/* XXX ROUGH: each child is roughly 1/4 the
 			   screen size of the parent */
@@ -1357,7 +1355,6 @@ static void update_prio(struct patch *p,
 
 		/* higher prio = more reusable */
 		p->priority = vec3_magnitude(&distv) / (2.f * radius);
-		p->priority *= p->level * .25;
 
 		//printf("culled dist =%g ->prio=%d\n", dist, p->priority);
 	} else {
@@ -1408,7 +1405,7 @@ static void update_prio(struct patch *p,
 
 		p->priority = area;
 
-		if (DEBUG) {
+		if (DEBUG && 0) {
 			char buf[40];
 			printf("%s p->priority = %g%%, area=%g\n",
 			       patch_name(p, buf),
@@ -1422,7 +1419,7 @@ static void generate_geom(struct quadtree *qt);
 
 /* try to maintain a policy of having a patch no larger than
    N% of the screen, and no smaller than M% */
-static const float MAXSIZE = 5.f / 100;
+static const float MAXSIZE = 10.f / 100;
 static const float MINSIZE = 1.f / 100;
 
 static int mergesmall(const struct patch *p)
@@ -1430,20 +1427,9 @@ static int mergesmall(const struct patch *p)
 	return (p->priority < MINSIZE);
 }
 
-void quadtree_update_view(struct quadtree *qt, const matrix_t *mat,
-			  const vec3_t *camerapos)
+static void compute_cull_planes(const struct quadtree *qt, const matrix_t *mat,
+				const vec3_t *camerapos, plane_t cullplanes[7])
 {
-	char buf[40];
-	plane_t cullplanes[7];	/* 6 frustum and 1 horizon */
-
-	/* remove all active patches into a local list */
-	struct list_head local, *pp, *pnext;
-	INIT_LIST_HEAD(&local);
-	list_splice_init(&qt->visible, &local);
-	list_splice_init(&qt->culled, &local);
-	qt->nactive = 0;
-	qt->nvisible = 0;
-
 	/* get the view frustum in object space */
 	plane_extract(mat, cullplanes);
 
@@ -1456,7 +1442,7 @@ void quadtree_update_view(struct quadtree *qt, const matrix_t *mat,
 		float alt = vec3_magnitude(camerapos);
 		float radius = qt->radius;
 
-		radius *= .97;
+		radius *= .99;
 
 		h->normal = *camerapos;
 		vec3_normalize(&h->normal);
@@ -1477,6 +1463,24 @@ void quadtree_update_view(struct quadtree *qt, const matrix_t *mat,
 
 	for(int i = 0; i < 7; i++)
 		plane_normalize(&cullplanes[i]);
+
+}
+
+void quadtree_update_view(struct quadtree *qt, const matrix_t *mat,
+			  const vec3_t *camerapos)
+{
+	char buf[40];
+	plane_t cullplanes[7];	/* 6 frustum and 1 horizon */
+
+	/* remove all active patches into a local list */
+	struct list_head local, *pp, *pnext;
+	INIT_LIST_HEAD(&local);
+	list_splice_init(&qt->visible, &local);
+	list_splice_init(&qt->culled, &local);
+	qt->nactive = 0;
+	qt->nvisible = 0;
+
+	compute_cull_planes(qt, mat, camerapos, cullplanes);
 
 	if (ANNOTATE) {
 		/* display cull planes */
@@ -1525,7 +1529,7 @@ void quadtree_update_view(struct quadtree *qt, const matrix_t *mat,
 
 		list_del(pp);	/* remove from local list */
 
-		p->flags &= ~(PF_CULLED | PF_ACTIVE);
+		p->flags &= ~(PF_CULLED | PF_ACTIVE | PF_LATECULL);
 
 		update_prio(p, qt->radius, mat, cullplanes, camerapos);
 
@@ -1585,6 +1589,28 @@ void quadtree_update_view(struct quadtree *qt, const matrix_t *mat,
 			
 			patch_split(qt, p);
 			goto restart_split_list;
+		}
+	}
+
+	{
+		qt->phase++;
+
+	  restart_recull_list:
+		list_for_each(pp, &qt->visible) {
+			struct patch *p = list_entry(pp, struct patch, list);
+
+			if (p->phase == qt->phase)
+				continue;
+			p->phase = qt->phase;
+
+			assert((p->flags & PF_CULLED) == 0);
+			if (box_cull(&p->bbox, cullplanes, 7) == CULL_OUT) {
+				printf("%s: needs culling\n", patch_name(p, buf));
+				patch_remove_active(qt, p);
+				p->flags |= PF_CULLED | PF_LATECULL;
+				patch_insert_active(qt, p);
+				goto restart_recull_list;
+			}
 		}
 	}
 
@@ -1861,7 +1887,9 @@ void quadtree_render(const struct quadtree *qt, void (*prerender)(const struct p
 			glVertex3fv(b->centre.v);
 			glEnd();
 
-			if (p->phase == qt->phase) 
+			if (p->flags & PF_LATECULL)
+				glColor3f(p->priority, 0, p->priority);
+			else if (p->phase == qt->phase) 
 				glColor3f(p->priority, p->priority, 0);
 			else
 				glColor3f(p->priority, p->priority, p->priority);
