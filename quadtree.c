@@ -15,8 +15,13 @@
 #include "quadtree.h"
 #include "quadtree_priv.h"
 
-#define DEBUG		1
+#define DEBUG		0
 #define ANNOTATE	0
+
+#define TARGETSIZE (10.f / 100.)		/* target size as fraction of screen area */
+static const float MAXSIZE = TARGETSIZE * 2;	/* error threshold for splitting */
+static const float MINSIZE = TARGETSIZE / 4;	/* error threshold for merging */
+
 
 static int have_vbo = -1;
 static int have_cva = -1;
@@ -487,6 +492,7 @@ static void patch_init(struct patch *p, int level, unsigned id)
 	p->phase = 0;
 
 	p->priority = 0.f;
+	p->error = 0.f;
 }
 
 static int mergeculledonly(const struct patch *p)
@@ -1355,8 +1361,7 @@ static void update_prio(struct patch *p,
 
 		/* higher prio = more reusable */
 		p->priority = vec3_magnitude(&distv) / (2.f * radius);
-
-		//printf("culled dist =%g ->prio=%d\n", dist, p->priority);
+		p->error = 0.f;
 	} else {
 		vec3_t sph[4];
 		vec3_t proj[4];
@@ -1404,6 +1409,7 @@ static void update_prio(struct patch *p,
 		area = fabsf(area * 0.5f);
 
 		p->priority = area;
+		p->error += area - TARGETSIZE;
 
 		if (DEBUG && 0) {
 			char buf[40];
@@ -1417,14 +1423,9 @@ static void update_prio(struct patch *p,
 
 static void generate_geom(struct quadtree *qt);
 
-/* try to maintain a policy of having a patch no larger than
-   N% of the screen, and no smaller than M% */
-static const float MAXSIZE = 10.f / 100;
-static const float MINSIZE = 1.f / 100;
-
 static int mergesmall(const struct patch *p)
 {
-	return (p->priority < MINSIZE);
+	return (p->error < MINSIZE);
 }
 
 static void compute_cull_planes(const struct quadtree *qt, const matrix_t *mat,
@@ -1554,8 +1555,8 @@ void quadtree_update_view(struct quadtree *qt, const matrix_t *mat,
 			p->phase = qt->phase;
 
 			if (DEBUG)
-				printf(">>>merge %p %s %g%%\n",p, patch_name(p, buf),
-				       p->priority * 100);
+				printf(">>>merge %p %s pri=%g%%, error=%g%%\n",p, patch_name(p, buf),
+				       p->priority * 100, p->error * 100);
 			
 			patch_merge(qt, p, mergesmall);
 
@@ -1579,13 +1580,13 @@ void quadtree_update_view(struct quadtree *qt, const matrix_t *mat,
 		if (p->phase == qt->phase)
 			continue;
 
-		if (p->priority >= MAXSIZE) {
+		if (p->error >= MAXSIZE) {
 			p->phase = qt->phase;
 			
 			if (DEBUG)
-				printf(">>>split %p %s %g%%\n",
+				printf(">>>split %p %s pri=%g%%, error=%g%%\n",
 				       p, patch_name(p, buf),
-				       p->priority * 100);
+				       p->priority * 100, p->error * 100);
 			
 			patch_split(qt, p);
 			goto restart_split_list;
@@ -1605,7 +1606,7 @@ void quadtree_update_view(struct quadtree *qt, const matrix_t *mat,
 
 			assert((p->flags & PF_CULLED) == 0);
 			if (box_cull(&p->bbox, cullplanes, 7) == CULL_OUT) {
-				printf("%s: needs culling\n", patch_name(p, buf));
+				//printf("%s: needs culling\n", patch_name(p, buf));
 				patch_remove_active(qt, p);
 				p->flags |= PF_CULLED | PF_LATECULL;
 				patch_insert_active(qt, p);

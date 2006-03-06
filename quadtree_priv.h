@@ -111,6 +111,8 @@ struct patch {
 	   mergable/recyclable. */
 	float priority;
 
+	float error;		/* accumulated error from desired target size */
+
 	struct list_head list;	/* list pointers for whatever list we're on */
 
 	/* Offset into the vertex array, in units of
