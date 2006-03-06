@@ -777,6 +777,7 @@ static int patch_merge(struct quadtree *qt, struct patch *p,
 	parent->priority = 0.f;
 	parent->flags |= culled;
 	parent->pinned++;
+	parent->phase = p->phase;
 
 	for(int i = 0; i < 4; i++)
 		assert(parent->kids[i] == NULL ||
@@ -915,6 +916,7 @@ static int patch_split(struct quadtree *qt, struct patch *parent)
 
 		k[i]->flags |= parent->flags & PF_CULLED;
 		k[i]->pinned++;
+		k[i]->phase = parent->phase;
 
 		assert(k[i]->parent == parent);
 	}
