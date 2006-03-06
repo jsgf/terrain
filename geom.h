@@ -46,6 +46,7 @@ typedef union matrix {
 #define MATRIX_IDENT	((matrix_t) { .m = { [0] = 1.f, [5] = 1.f, [10] = 1.f, [15] = 1.f } })
 
 void matrix_transform(const matrix_t *mat, const vec3_t *in, vec3_t *out);
+void matrix_project(const matrix_t *mat, const vec3_t *in, vec3_t *out);
 void matrix_multiply(const matrix_t *a, const matrix_t *b, matrix_t *out);
 
 enum {

@@ -84,6 +84,22 @@ void matrix_transform(const matrix_t *m, const vec3_t *in, vec3_t *out)
 	*out = t;
 }
 
+void matrix_project(const matrix_t *m, const vec3_t *in, vec3_t *out)
+{
+	vec3_t t;
+	float w;
+
+	t.x = m->m[0] * in->x + m->m[4] * in->y + m->m[ 8] * in->z + m->m[12];
+	t.y = m->m[1] * in->x + m->m[5] * in->y + m->m[ 9] * in->z + m->m[13];
+	t.z = m->m[2] * in->x + m->m[6] * in->y + m->m[10] * in->z + m->m[14];
+	w   = m->m[3] * in->x + m->m[7] * in->y + m->m[11] * in->z + m->m[15];
+
+	if (w != 0.f)
+		vec3_scale(&t, 1.f/w);
+
+	*out = t;
+}
+
 void matrix_multiply(const matrix_t *a, const matrix_t *b, matrix_t *out)
 {
 #define A(r,c) a->m[4*c+r]

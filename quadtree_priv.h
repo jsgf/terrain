@@ -91,19 +91,24 @@ struct patch {
 	unsigned char level;	/* level in quadtree */
 
 	unsigned flags;
-#define PF_VISITED	(1<<0)	/* visited in this pass */
+//#define PF_VISITED	(1<<0)	/* visited in this pass */
 #define PF_CULLED	(1<<1)	/* not visible */
 #define PF_UNUSED	(1<<2)	/* no valid contents */
 #define PF_ACTIVE	(1<<3)	/* active part of the structure */
 #define PF_UPDATE_GEOM	(1<<4)	/* geometry needs updating */
 #define PF_STITCH_GEOM	(1<<5)	/* geometry needs stitching */
 
+	int phase;
+
 	int pinned;		/* pinned count; this is set to non-0
 				   when this patch is required to
 				   remain as-is */
 
-	int priority;	/* high-priority: more splittable;
-			   low: more mergable */
+	/* Patch priority.  When a patch is visible, higher priority
+	   means a patch is more splittable.  When a patch is culled,
+	   higher priority means a patch is more
+	   mergable/recyclable. */
+	float priority;
 
 	struct list_head list;	/* list pointers for whatever list we're on */
 
@@ -147,6 +152,8 @@ struct quadtree {
 
 	GLuint vtxbufid;	/* ID of vertex buffer object (0 if not used) */
 	struct vertex *varray;	/* vertex array (NULL if using a VBO) */
+
+	int phase;		/* used for marking patches */
 
 	/* Radius of the terrain sphere, and the function used to
 	   generate elevation for a particular point on its

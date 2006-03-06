@@ -15,8 +15,8 @@
 #include "quadtree.h"
 #include "quadtree_priv.h"
 
-static const int DEBUG = 0;
-static const int ANNOTATE = 0;
+#define DEBUG		1
+#define ANNOTATE	0
 
 static int have_vbo = -1;
 static int have_cva = -1;
@@ -41,7 +41,8 @@ struct vertex {
 	GLfloat x,y,z;		/* short? */
 };
 
-static int patch_merge(struct quadtree *qt, struct patch *p);
+static int patch_merge(struct quadtree *qt, struct patch *p,
+		       int (*maymerge)(const struct patch *));
 
 static inline int clamp(int x, int lower, int upper)
 {
@@ -402,7 +403,7 @@ static struct patch *find_lowest(struct quadtree *qt)
 			
 		if (p->level > 0 &&
 		    p->pinned == 0 &&
-		    (p->flags & PF_VISITED) == 0) {
+		    p->phase != qt->phase) {
 			ret = p;
 			break;
 		}
@@ -414,7 +415,7 @@ static struct patch *find_lowest(struct quadtree *qt)
 			
 			if (p->level > 0 &&
 			    p->pinned == 0 &&
-			    (p->flags & PF_VISITED) == 0) {
+			    p->phase != qt->phase) {
 				ret = p;
 				break;
 			}
@@ -425,10 +426,11 @@ static struct patch *find_lowest(struct quadtree *qt)
 		char buf[40];
 
 		assert(ret->pinned == 0);
-		assert((ret->flags & (PF_ACTIVE|PF_VISITED)) == PF_ACTIVE);
+		assert(ret->phase != qt->phase);
+		assert(ret->flags & PF_ACTIVE);
 
 		if (DEBUG)
-			printf("find_lowest returning %s (prio %d %s), flags=%x\n",
+			printf("find_lowest returning %s (prio %g %s), flags=%x\n",
 			       patch_name(ret, buf), ret->priority, ret->flags & PF_CULLED ? "culled" : "",
 			       ret->flags);
 	}
@@ -482,8 +484,14 @@ static void patch_init(struct patch *p, int level, unsigned id)
 	p->parent = NULL;
 	p->level = level;
 	p->id = id;
+	p->phase = 0;
 
-	p->priority = 0;
+	p->priority = 0.f;
+}
+
+static int mergeculledonly(const struct patch *p)
+{
+	return (p->flags & PF_CULLED) != 0;
 }
 
 /* Allocate a patch from the freelist.  Caller should call
@@ -508,7 +516,9 @@ static struct patch *patch_alloc(struct quadtree *qt)
 			if (DEBUG)
 				printf("freelist refill merge %s, freelist %d\n",
 				       patch_name(lowest, buf), qt->nfree);
-			patch_merge(qt, lowest);
+			if (!patch_merge(qt, lowest,
+					 (lowest->flags & PF_CULLED) ? mergeculledonly : NULL))
+				lowest->phase = qt->phase;
 		}
 		qt->reclaim = 0;
 	}
@@ -645,12 +655,14 @@ static void compute_bbox(const struct quadtree *qt, struct patch *p)
    ---+-------+---+---+--
       |       |       |
 */
-static int patch_merge(struct quadtree *qt, struct patch *p)
+static int patch_merge(struct quadtree *qt, struct patch *p,
+		       int (*maymerge)(const struct patch *p))
 {
 	struct patch *parent;	/* the new patch we're creating */
 	struct patch *sib[4] = {};	/* the group of siblings including p */
 	unsigned long start_id;
 	char buf[40];
+	unsigned culled = PF_CULLED;
 
 	if (p == NULL)
 		return 0;
@@ -658,10 +670,17 @@ static int patch_merge(struct quadtree *qt, struct patch *p)
 	if (DEBUG)
 		printf("merging %s\n", patch_name(p, buf));
 
-	p->flags |= PF_VISITED;
+	if (maymerge && !(*maymerge)(p)) {
+		printf("merge %s failed: maymerge failed\n", patch_name(p, buf));
+		p->phase = qt->phase;
+		return 0;
+	}
+
+	//p->flags |= PF_VISITED;
 
 	if (p->level == 0) {
 		printf("merge %s failed: level 0\n", patch_name(p, buf));
+		p->phase = qt->phase;
 		return 0;
 	}
 
@@ -696,10 +715,12 @@ static int patch_merge(struct quadtree *qt, struct patch *p)
 			assert(p->neigh[pn->ccw + 1]->level ==
 			       sibling->level);
 
-			if (!patch_merge(qt, sibling))
+			if (!patch_merge(qt, sibling, maymerge))
 				goto out_fail;
 			sibling = p->neigh[pn->ccw];
 		}
+
+		culled &= p->flags;
 
 		assert(p->level == sibling->level);
 		assert(p->neigh[pn->ccw + 1] == p->neigh[pn->ccw]);
@@ -707,7 +728,7 @@ static int patch_merge(struct quadtree *qt, struct patch *p)
 		/* check non-sibling neighbours */
 		if (p->neigh[pn->ud]->level > p->level) {
 			assert(p->neigh[pn->ud]->level == p->level+1);
-			if (!patch_merge(qt, p->neigh[pn->ud]))
+			if (!patch_merge(qt, p->neigh[pn->ud], maymerge))
 				goto out_fail;
 		}
 		assert(p->neigh[pn->ud]->level <= p->level);
@@ -715,7 +736,7 @@ static int patch_merge(struct quadtree *qt, struct patch *p)
 
 		if (p->neigh[pn->lr]->level > p->level) {
 			assert(p->neigh[pn->lr]->level == p->level+1);
-			if (!patch_merge(qt, p->neigh[pn->lr]))
+			if (!patch_merge(qt, p->neigh[pn->lr], maymerge))
 				goto out_fail;
 		}
 		assert(p->neigh[pn->lr]->level <= p->level);
@@ -753,8 +774,8 @@ static int patch_merge(struct quadtree *qt, struct patch *p)
 
 		compute_bbox(qt, parent);
 	}
-	parent->priority = 0;
-	parent->flags |= PF_VISITED;
+	parent->priority = 0.f;
+	parent->flags |= culled;
 	parent->pinned++;
 
 	for(int i = 0; i < 4; i++)
@@ -774,8 +795,12 @@ static int patch_merge(struct quadtree *qt, struct patch *p)
 		assert(sib[i]->neigh[pn->ud] == sib[i]->neigh[pn->ud+1]);
 		parent->neigh[pn->ud+sx] = sib[i]->neigh[pn->ud];
 
-		parent->priority = clamp(parent->priority + sib[i]->priority, 0, 255);
+		parent->priority += sib[i]->priority;
 	}
+
+	/* when culled, the parent prio is the average of the kids */
+	if (parent->flags & PF_CULLED)
+		parent->priority *= .25f;
 
 	/* now that the forward-links are set up, do the backlinks */
 	for(int i = 0; i < 4; i++)
@@ -847,8 +872,10 @@ static int patch_split(struct quadtree *qt, struct patch *parent)
 	/* don't split if we're getting too small */
 	if ((parent->x0 != parent->x1 && abs(parent->x0 - parent->x1) / 2 < PATCH_SAMPLES) ||
 	    (parent->y0 != parent->y1 && abs(parent->y0 - parent->y1) / 2 < PATCH_SAMPLES) ||
-	    (parent->z0 != parent->z1 && abs(parent->z0 - parent->z1) / 2 < PATCH_SAMPLES))
+	    (parent->z0 != parent->z1 && abs(parent->z0 - parent->z1) / 2 < PATCH_SAMPLES)) {
+		parent->phase = qt->phase;
 		return 0;
+	}
 
 	assert(check_neighbour_levels(parent));
 	assert(parent->flags & PF_ACTIVE);
@@ -865,7 +892,6 @@ static int patch_split(struct quadtree *qt, struct patch *parent)
 		assert(parent->flags & PF_ACTIVE);
 		if (k[i] == NULL) {
 			k[i] = patch_alloc(qt);
-			assert(parent->flags & PF_ACTIVE);
 			if (k[i] == NULL)
 				goto out_fail;
 			patch_init(k[i], parent->level + 1, childid(parent->id, i));
@@ -877,12 +903,17 @@ static int patch_split(struct quadtree *qt, struct patch *parent)
 			patch_remove_freelist(qt, k[i]); /* reclaimed */
 		}
 
-		assert(parent->flags & PF_ACTIVE);
+		if (k[i]->flags & PF_CULLED) {
+			/* if culled, the kids have the same prio as
+			   the parent */
+			k[i]->priority = parent->priority * k[i]->level * .25f;
+		} else {
+			/* XXX ROUGH: each child is roughly 1/4 the
+			   screen size of the parent */
+			k[i]->priority = parent->priority / 4;
+		}
 
-		/* XXX ROUGH: each child is roughly 1/4 the screen size of the parent */
-		k[i]->priority = parent->priority / 4;
-
-		k[i]->flags |= PF_VISITED;
+		k[i]->flags |= parent->flags & PF_CULLED;
 		k[i]->pinned++;
 
 		assert(k[i]->parent == parent);
@@ -898,8 +929,14 @@ static int patch_split(struct quadtree *qt, struct patch *parent)
 		if (parent->neigh[dir]->level < parent->level) {
 			assert(parent->neigh[dir]->level == (parent->level-1));
 
-			if (!patch_split(qt, parent->neigh[dir]))
+			if (!patch_split(qt, parent->neigh[dir])) {
+				/* unpin what we've done so far */
+				for(enum patch_neighbour dd = 0; dd < dir; dd++) {
+					assert(parent->neigh[dd]->pinned > 0);
+					parent->neigh[dd]->pinned--;
+				}
 				goto out_fail; /* split failed */
+			}
 		}
 		assert(parent->neigh[dir]->level >= parent->level &&
 		       parent->neigh[dir]->level <= parent->level+1);
@@ -913,9 +950,9 @@ static int patch_split(struct quadtree *qt, struct patch *parent)
 	for(int i = 0; i < 4; i++)
 		backlink_neighbours(k[i], parent);
 
-	signed int mx = mid(parent->x0, parent->x1);
-	signed int my = mid(parent->y0, parent->y1);
-	signed int mz = mid(parent->z0, parent->z1);
+	signed int mx = (parent->x0 + parent->x1) / 2;
+	signed int my = (parent->y0 + parent->y1) / 2;
+	signed int mz = (parent->z0 + parent->z1) / 2;
 
 	/* subdivide the coords */
 	if (parent->x0 == parent->x1) { /* left, right */
@@ -994,8 +1031,12 @@ static int patch_split(struct quadtree *qt, struct patch *parent)
 	return 1;
 
   out_fail:
+	assert(parent->pinned > 0);
+	parent->pinned--;
 	for(int i = 0; i < 4; i++)
 		if (k[i]) {
+			assert(k[i]->pinned > 0);
+			k[i]->pinned--;
 			patch_init(k[i], -1, 0);
 			patch_free(qt, k[i]);
 		}
@@ -1030,6 +1071,8 @@ struct quadtree *quadtree_create(int num_patches, long radius,
 	qt->reclaim = 0;
 	qt->nactive = 0;
 	qt->nvisible = 0;
+
+	qt->phase = 0;
 
 	/* add patches to freelist */
 	for(int i = 0; i < num_patches; i++) {
@@ -1175,16 +1218,146 @@ struct quadtree *quadtree_create(int num_patches, long radius,
 	return NULL;
 }
 
+static void patch_bbox(const struct patch *p)
+{
+	const box_t *b = &p->bbox;
+
+	glBegin(GL_LINES);
+
+	glVertex3f(b->centre.x - b->extent.x,
+		   b->centre.y - b->extent.y,
+		   b->centre.z - b->extent.z);
+	glVertex3f(b->centre.x - b->extent.x,
+		   b->centre.y - b->extent.y,
+		   b->centre.z + b->extent.z);
+
+	glVertex3f(b->centre.x - b->extent.x,
+		   b->centre.y - b->extent.y,
+		   b->centre.z - b->extent.z);
+	glVertex3f(b->centre.x - b->extent.x,
+		   b->centre.y + b->extent.y,
+		   b->centre.z - b->extent.z);
+
+	glVertex3f(b->centre.x - b->extent.x,
+		   b->centre.y - b->extent.y,
+		   b->centre.z - b->extent.z);
+	glVertex3f(b->centre.x + b->extent.x,
+		   b->centre.y - b->extent.y,
+		   b->centre.z - b->extent.z);
+
+
+	glVertex3f(b->centre.x + b->extent.x,
+		   b->centre.y + b->extent.y,
+		   b->centre.z + b->extent.z);
+	glVertex3f(b->centre.x + b->extent.x,
+		   b->centre.y + b->extent.y,
+		   b->centre.z - b->extent.z);
+
+	glVertex3f(b->centre.x + b->extent.x,
+		   b->centre.y + b->extent.y,
+		   b->centre.z + b->extent.z);
+	glVertex3f(b->centre.x + b->extent.x,
+		   b->centre.y - b->extent.y,
+		   b->centre.z + b->extent.z);
+
+	glVertex3f(b->centre.x + b->extent.x,
+		   b->centre.y + b->extent.y,
+		   b->centre.z + b->extent.z);
+	glVertex3f(b->centre.x - b->extent.x,
+		   b->centre.y + b->extent.y,
+		   b->centre.z + b->extent.z);
+
+	glVertex3f(b->centre.x + b->extent.x,
+		   b->centre.y - b->extent.y,
+		   b->centre.z - b->extent.z);
+	glVertex3f(b->centre.x + b->extent.x,
+		   b->centre.y - b->extent.y,
+		   b->centre.z + b->extent.z);
+
+	glVertex3f(b->centre.x + b->extent.x,
+		   b->centre.y - b->extent.y,
+		   b->centre.z + b->extent.z);
+	glVertex3f(b->centre.x - b->extent.x,
+		   b->centre.y - b->extent.y,
+		   b->centre.z + b->extent.z);
+
+	glVertex3f(b->centre.x - b->extent.x,
+		   b->centre.y - b->extent.y,
+		   b->centre.z + b->extent.z);
+	glVertex3f(b->centre.x - b->extent.x,
+		   b->centre.y + b->extent.y,
+		   b->centre.z + b->extent.z);
+
+	glVertex3f(b->centre.x - b->extent.x,
+		   b->centre.y + b->extent.y,
+		   b->centre.z + b->extent.z);
+	glVertex3f(b->centre.x - b->extent.x,
+		   b->centre.y + b->extent.y,
+		   b->centre.z - b->extent.z);
+
+	glVertex3f(b->centre.x - b->extent.x,
+		   b->centre.y + b->extent.y,
+		   b->centre.z - b->extent.z);
+	glVertex3f(b->centre.x + b->extent.x,
+		   b->centre.y + b->extent.y,
+		   b->centre.z - b->extent.z);
+
+	glVertex3f(b->centre.x + b->extent.x,
+		   b->centre.y + b->extent.y,
+		   b->centre.z - b->extent.z);
+	glVertex3f(b->centre.x + b->extent.x,
+		   b->centre.y - b->extent.y,
+		   b->centre.z - b->extent.z);
+
+	glEnd();
+
+}
+
+static void patch_outline(const struct patch *p, long radius)
+{
+	vec3_t sph[4];
+
+	if (p->z0 == p->z1 ||
+	    p->y0 == p->y1) {
+		project_to_sphere(radius, p->x0, p->y0, p->z0, &sph[0]);
+		project_to_sphere(radius, p->x1, p->y0, p->z0, &sph[1]);
+		project_to_sphere(radius, p->x1, p->y1, p->z1, &sph[2]);
+		project_to_sphere(radius, p->x0, p->y1, p->z1, &sph[3]);
+	} else {
+		project_to_sphere(radius, p->x0, p->y0, p->z0, &sph[0]);
+		project_to_sphere(radius, p->x0, p->y1, p->z0, &sph[1]);
+		project_to_sphere(radius, p->x0, p->y1, p->z1, &sph[2]);
+		project_to_sphere(radius, p->x0, p->y0, p->z1, &sph[3]);
+	}
+
+	glBegin(GL_LINE_LOOP);
+	  glVertex3fv(sph[0].v);
+	  glVertex3fv(sph[1].v);
+	  glVertex3fv(sph[2].v);
+	  glVertex3fv(sph[3].v);
+	glEnd();
+}
+
 static void update_prio(struct patch *p,
 			long radius,
 			const matrix_t *mat,
-			plane_t cullplanes[7])
+			plane_t cullplanes[7],
+			const vec3_t *camera)
 {
 	p->flags &= ~PF_CULLED;
-	p->priority = 0;
 
 	if (box_cull(&p->bbox, cullplanes, 7) == CULL_OUT) {
+		vec3_t distv;
+
+		vec3_sub(&distv, &p->bbox.centre, camera);
+
 		p->flags |= PF_CULLED;
+
+		/* higher prio = more reusable */
+		p->priority = vec3_magnitude(&distv) / (2.f * radius);
+		p->priority *= p->level * .25;
+
+		//printf("culled dist =%g ->prio=%d\n", dist, p->priority);
 	} else {
 		vec3_t sph[4];
 		vec3_t proj[4];
@@ -1202,25 +1375,61 @@ static void update_prio(struct patch *p,
 			project_to_sphere(radius, p->x0, p->y0, p->z1, &sph[3]);
 		}
 
-		for(int i = 0; i < 4; i++)
-			matrix_transform(mat, &sph[i], &proj[i]);
+		/* project into normalized 0-1 coord space, so area is
+		   computed directly as a fraction of viewport area */
+		for(int i = 0; i < 4; i++) {
+			matrix_project(mat, &sph[i], &proj[i]);
+			proj[i].x = proj[i].x * .5 + .5;
+			proj[i].y = proj[i].y * .5 + .5;
+		}
+
+		if (ANNOTATE) {
+			glPushAttrib(GL_ENABLE_BIT);
+			glDisable(GL_LIGHTING);
+			glDisable(GL_TEXTURE_2D);
+
+			glColor3f(1,1,1);
+			patch_outline(p, radius);
+
+			glPopAttrib();
+		}
 
 		float area = 0.f;
 
 		for(unsigned i = 0; i < 4; i++) {
 			unsigned n = (i+1) % 4;
-			area += (proj[i].x * proj[n].y) - (proj[n].x * proj[i].y);
+			area += (proj[i].x * proj[n].y) -
+				(proj[n].x * proj[i].y);
 		}
 
-		area *= 0.5f;
+		area = fabsf(area * 0.5f);
 
-		p->priority = fabsf(area);
+		p->priority = area;
+
+		if (DEBUG) {
+			char buf[40];
+			printf("%s p->priority = %g%%, area=%g\n",
+			       patch_name(p, buf),
+			       p->priority * 100.f,
+			       area);
+		}
 	}
 }
 
 static void generate_geom(struct quadtree *qt);
 
-void quadtree_update_view(struct quadtree *qt, const matrix_t *mat, const vec3_t *camerapos)
+/* try to maintain a policy of having a patch no larger than
+   N% of the screen, and no smaller than M% */
+static const float MAXSIZE = 5.f / 100;
+static const float MINSIZE = 1.f / 100;
+
+static int mergesmall(const struct patch *p)
+{
+	return (p->priority < MINSIZE);
+}
+
+void quadtree_update_view(struct quadtree *qt, const matrix_t *mat,
+			  const vec3_t *camerapos)
 {
 	char buf[40];
 	plane_t cullplanes[7];	/* 6 frustum and 1 horizon */
@@ -1238,9 +1447,9 @@ void quadtree_update_view(struct quadtree *qt, const matrix_t *mat, const vec3_t
 
 	{
 		/* Compute the horizion cull plane.  The plane's
-		  normal is the same direction as the camera's
-		  position vector.  The distance depends on the
-		  camera's altitude. */
+		   normal is the same direction as the camera's
+		   position vector.  The distance depends on the
+		   camera's altitude. */
 		plane_t *h = &cullplanes[6];
 		float alt = vec3_magnitude(camerapos);
 		float radius = qt->radius;
@@ -1304,17 +1513,19 @@ void quadtree_update_view(struct quadtree *qt, const matrix_t *mat, const vec3_t
 		glPopAttrib();
 	}
 
-	/* Project each patch using the view matrix, and compute the
-	   projected area. Use this to generate the priority for each
-	   patch, and update the active list.  */
+	qt->phase++;
+
+	/* For each patch, check if it is culled or not.  In either
+	   case, compute a priority which decides how
+	   splittable/mergable it is. */
 	list_for_each_safe(pp, pnext, &local) {
 		struct patch *p = list_entry(pp, struct patch, list);
 
 		list_del(pp);	/* remove from local list */
 
-		p->flags &= ~(PF_VISITED | PF_CULLED | PF_ACTIVE);
+		p->flags &= ~(PF_CULLED | PF_ACTIVE);
 
-		update_prio(p, qt->radius, mat, cullplanes);
+		update_prio(p, qt->radius, mat, cullplanes, camerapos);
 
 		patch_insert_active(qt, p);
 	}
@@ -1324,67 +1535,55 @@ void quadtree_update_view(struct quadtree *qt, const matrix_t *mat, const vec3_t
 		printf("%d active, %d visible, %d culled\n",
 		       qt->nactive, qt->nvisible, qt->nactive - qt->nvisible);
 
-#if 0
-	for(int limit = 0;
-	    limit < 10 && (qt->nfree < qt->npatches/10);
-	    limit++) {
-		struct patch *lowest = find_lowest(qt);
 
-		if (lowest == NULL || lowest->priority > 255 * 2 / 100)
-			break;
-
-		if (DEBUG)
-			printf("incremental free merge %s, freelist %d\n",
-			       patch_name(lowest, buf), qt->nfree);
-		patch_merge(qt, lowest);
-	}
-	//printf("freelist=%d\n", qt->nfree);
-#endif
-
-	/* try to maintain a policy of having a patch no larger than
-	   N% of the screen, and no smaller than M% */
-	static const int MAXSIZE = 5;
-	static const int MINSIZE = 0;
-
-  restart_list:
+	qt->phase++;
+  restart_merge_list:
 	list_for_each(pp, &qt->visible) {
 		struct patch *p = list_entry(pp, struct patch, list);
 
-		assert((p->flags & (PF_CULLED|PF_ACTIVE)) == PF_ACTIVE);
-		assert(p->pinned == 0);
-			
-		if (p->flags & PF_VISITED)
+		if (p->phase == qt->phase)
 			continue;
 
-		if (p->level < 3 && p->priority >= (255 * MAXSIZE / 100)) {
-			p->flags |= PF_VISITED;
-			
-			if (DEBUG)
-				printf(">>>split %p %s %d%%\n",
-				       p, patch_name(p, buf),
-				       p->priority * 100 / 255);
-			
-			patch_split(qt, p);
-			goto restart_list;
-		}
-#if 0
-		if (p->priority <= (255 * MINSIZE / 100)) {
-			p->flags |= PF_VISITED;
+		if (0 && mergesmall(p)) {
+			p->phase = qt->phase;
 
 			if (DEBUG)
-				printf(">>>merge %p %s %d%%\n",p, patch_name(p, buf),
-				       p->priority * 100 / 255);
+				printf(">>>merge %p %s %g%%\n",p, patch_name(p, buf),
+				       p->priority * 100);
 			
-			patch_merge(qt, p);
+			patch_merge(qt, p, mergesmall);
 
 			/* restart from the beginning of the list,
 			   because everything might have been
 			   rearranged (and anyway, the list head is
 			   where the most splittable patches are
 			   anyway) */
-			goto restart_list;
+			goto restart_merge_list;
 		}
-#endif
+	}
+
+	qt->phase++;
+  restart_split_list:
+	list_for_each(pp, &qt->visible) {
+		struct patch *p = list_entry(pp, struct patch, list);
+
+		assert((p->flags & (PF_CULLED|PF_ACTIVE)) == PF_ACTIVE);
+		assert(p->pinned == 0);
+			
+		if (p->phase == qt->phase)
+			continue;
+
+		if (p->priority >= MAXSIZE) {
+			p->phase = qt->phase;
+			
+			if (DEBUG)
+				printf(">>>split %p %s %g%%\n",
+				       p, patch_name(p, buf),
+				       p->priority * 100);
+			
+			patch_split(qt, p);
+			goto restart_split_list;
+		}
 	}
 
 	generate_geom(qt);
@@ -1646,7 +1845,7 @@ void quadtree_render(const struct quadtree *qt, void (*prerender)(const struct p
 		GLERROR();
 	}
 
-	if (ANNOTATE) {
+	if (1 || ANNOTATE) {
 		glPushAttrib(GL_ENABLE_BIT);
 		glDisable(GL_LIGHTING);
 		glDisable(GL_TEXTURE_2D);
@@ -1660,45 +1859,14 @@ void quadtree_render(const struct quadtree *qt, void (*prerender)(const struct p
 			glVertex3fv(b->centre.v);
 			glEnd();
 
-			glColor3f(1,0,0);
-			glBegin(GL_LINES);
-			glVertex3f(b->centre.x - b->extent.x, b->centre.y - b->extent.y, b->centre.z - b->extent.z);
-			glVertex3f(b->centre.x - b->extent.x, b->centre.y - b->extent.y, b->centre.z + b->extent.z);
+			if (p->phase == qt->phase) 
+				glColor3f(p->priority, p->priority, 0);
+			else
+				glColor3f(p->priority, p->priority, p->priority);
+			patch_outline(p, qt->radius);
 
-			glVertex3f(b->centre.x - b->extent.x, b->centre.y - b->extent.y, b->centre.z - b->extent.z);
-			glVertex3f(b->centre.x - b->extent.x, b->centre.y + b->extent.y, b->centre.z - b->extent.z);
-
-			glVertex3f(b->centre.x - b->extent.x, b->centre.y - b->extent.y, b->centre.z - b->extent.z);
-			glVertex3f(b->centre.x + b->extent.x, b->centre.y - b->extent.y, b->centre.z - b->extent.z);
-
-
-			glVertex3f(b->centre.x + b->extent.x, b->centre.y + b->extent.y, b->centre.z + b->extent.z);
-			glVertex3f(b->centre.x + b->extent.x, b->centre.y + b->extent.y, b->centre.z - b->extent.z);
-
-			glVertex3f(b->centre.x + b->extent.x, b->centre.y + b->extent.y, b->centre.z + b->extent.z);
-			glVertex3f(b->centre.x + b->extent.x, b->centre.y - b->extent.y, b->centre.z + b->extent.z);
-
-			glVertex3f(b->centre.x + b->extent.x, b->centre.y + b->extent.y, b->centre.z + b->extent.z);
-			glVertex3f(b->centre.x - b->extent.x, b->centre.y + b->extent.y, b->centre.z + b->extent.z);
-
-			glVertex3f(b->centre.x + b->extent.x, b->centre.y - b->extent.y, b->centre.z - b->extent.z);
-			glVertex3f(b->centre.x + b->extent.x, b->centre.y - b->extent.y, b->centre.z + b->extent.z);
-
-			glVertex3f(b->centre.x + b->extent.x, b->centre.y - b->extent.y, b->centre.z + b->extent.z);
-			glVertex3f(b->centre.x - b->extent.x, b->centre.y - b->extent.y, b->centre.z + b->extent.z);
-
-			glVertex3f(b->centre.x - b->extent.x, b->centre.y - b->extent.y, b->centre.z + b->extent.z);
-			glVertex3f(b->centre.x - b->extent.x, b->centre.y + b->extent.y, b->centre.z + b->extent.z);
-
-			glVertex3f(b->centre.x - b->extent.x, b->centre.y + b->extent.y, b->centre.z + b->extent.z);
-			glVertex3f(b->centre.x - b->extent.x, b->centre.y + b->extent.y, b->centre.z - b->extent.z);
-
-			glVertex3f(b->centre.x - b->extent.x, b->centre.y + b->extent.y, b->centre.z - b->extent.z);
-			glVertex3f(b->centre.x + b->extent.x, b->centre.y + b->extent.y, b->centre.z - b->extent.z);
-
-			glVertex3f(b->centre.x + b->extent.x, b->centre.y + b->extent.y, b->centre.z - b->extent.z);
-			glVertex3f(b->centre.x + b->extent.x, b->centre.y - b->extent.y, b->centre.z - b->extent.z);
-			glEnd();
+			glColor3f(.75,0,0);
+			//patch_bbox(p);
 		}
 		glPopAttrib();
 	}

@@ -13,7 +13,7 @@
 #include "noise.h"
 #include "font.h"
 
-#define RADIUS (1<<10)
+#define RADIUS (1<<20)
 
 static struct quadtree *qt;
 
@@ -628,7 +628,7 @@ int main(int argc, char **argv)
         glutInitWindowSize(480*2, 272*2);
 	glutCreateWindow( __FILE__ );
 
-	qt = quadtree_create(1000, RADIUS, generate);
+	qt = quadtree_create(250, RADIUS, generate);
 	
 	//glutSpecialFunc(special_down);
 	glutKeyboardFunc(keydown);
