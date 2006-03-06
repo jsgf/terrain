@@ -18,9 +18,10 @@
 #define DEBUG		0
 #define ANNOTATE	0
 
-#define TARGETSIZE (10.f / 100.)		/* target size as fraction of screen area */
-static const float MAXSIZE = TARGETSIZE * 2;	/* error threshold for splitting */
-static const float MINSIZE = TARGETSIZE / 4;	/* error threshold for merging */
+#define TARGETSIZE (5.f / 100.)		/* target size as fraction of screen area */
+static const float MARGIN  = TARGETSIZE;	/* size of error needed before updating */
+static const float MAXSIZE =  3*TARGETSIZE;	/* error threshold for splitting */
+static const float MINSIZE = -4*TARGETSIZE;	/* error threshold for merging */
 
 
 static int have_vbo = -1;
@@ -677,7 +678,7 @@ static int patch_merge(struct quadtree *qt, struct patch *p,
 		printf("merging %s\n", patch_name(p, buf));
 
 	if (maymerge && !(*maymerge)(p)) {
-		printf("merge %s failed: maymerge failed\n", patch_name(p, buf));
+		//printf("merge %s failed: maymerge failed\n", patch_name(p, buf));
 		p->phase = qt->phase;
 		return 0;
 	}
@@ -779,6 +780,7 @@ static int patch_merge(struct quadtree *qt, struct patch *p,
 		compute_bbox(qt, parent);
 	}
 	parent->priority = 0.f;
+	parent->error = 0.f;
 	parent->flags |= culled;
 	parent->pinned++;
 	parent->phase = p->phase;
@@ -917,6 +919,7 @@ static int patch_split(struct quadtree *qt, struct patch *parent)
 			   screen size of the parent */
 			k[i]->priority = parent->priority / 4;
 		}
+		k[i]->error = 0.f;
 
 		k[i]->flags |= parent->flags & PF_CULLED;
 		k[i]->pinned++;
@@ -1409,7 +1412,8 @@ static void update_prio(struct patch *p,
 		area = fabsf(area * 0.5f);
 
 		p->priority = area;
-		p->error += area - TARGETSIZE;
+		if (fabsf(area - TARGETSIZE) > MARGIN)
+			p->error += area - TARGETSIZE;
 
 		if (DEBUG && 0) {
 			char buf[40];
@@ -1551,7 +1555,7 @@ void quadtree_update_view(struct quadtree *qt, const matrix_t *mat,
 		if (p->phase == qt->phase)
 			continue;
 
-		if (0 && mergesmall(p)) {
+		if (mergesmall(p)) {
 			p->phase = qt->phase;
 
 			if (DEBUG)
