@@ -1,6 +1,16 @@
+#define _GNU_SOURCE		/* for sincosf */
 #include <math.h>
 
 #include "geom.h"
+
+#define EPSILON	(1e-6f)
+
+const vec3_t vec_px = VEC3i( 1, 0, 0);
+const vec3_t vec_nx = VEC3i(-1, 0, 0);
+const vec3_t vec_py = VEC3i( 0, 1, 0);
+const vec3_t vec_ny = VEC3i( 0,-1, 0);
+const vec3_t vec_pz = VEC3i( 0, 0, 1);
+const vec3_t vec_nz = VEC3i( 0, 0,-1);
 
 void vec3_cross(vec3_t *out, const vec3_t *a, const vec3_t *b)
 {
@@ -16,7 +26,7 @@ float vec3_dot(const vec3_t *a, const vec3_t *b)
 
 float vec3_magnitude(const vec3_t *v)
 {
-	return sqrtf(vec3_dot(v, v));;
+	return sqrtf(vec3_dot(v, v));
 }
 
 void vec3_scale(vec3_t *v, float scale)
@@ -71,6 +81,166 @@ void vec3_max(vec3_t *out, const vec3_t *a, const vec3_t *b)
 	out->x = a->x > b->x ? a->x : b->x;
 	out->y = a->y > b->y ? a->y : b->y;
 	out->z = a->z > b->z ? a->z : b->z;
+}
+
+void vec3_majoraxis(vec3_t *out, const vec3_t *v)
+{
+	float x, y, z;
+
+	x = fabsf(v->x);
+	y = fabsf(v->y);
+	z = fabsf(v->z);
+
+	if (x > y && x > z)
+		*out = VEC3(v->x < 0 ? -1 : 1, 0, 0);
+	else if (y > x && y > z)
+		*out = VEC3(0, v->y < 0 ? -1 : 1, 0);
+	else
+		*out = VEC3(0, 0, v->z < 0 ? -1 : 1);
+}
+
+void vec3_rotate(vec3_t *out, const vec3_t *v, float angle, const vec3_t *axis)
+{
+	quat_t q;
+	quat_axis_angle(&q, axis, angle);
+	quat_rotate(out, &q, v);
+}
+
+
+void quat_axis_angle(quat_t *q, const vec3_t *v, float angle)
+{
+	float s, c;
+	sincosf(angle/2, &s, &c);
+
+	q->w = c;
+	q->v = *v;
+	vec3_normalize(&q->v);
+	vec3_scale(&q->v, s);
+}
+
+void quat_vector_vector(quat_t *q, const vec3_t *a, const vec3_t *b)
+{
+	float cost = vec3_dot(a, b);
+
+	if (cost > 0.99999f) {
+		/* parallel */
+		*q = QUAT_IDENT;
+	} else if (cost < -0.99999f) {
+		/* opposite */
+		vec3_t t = VEC3(0, a->x, -a->y); /* cross with (1,0,0) */
+		if (vec3_magnitude(&t) < EPSILON)
+			t = VEC3(-a->z, 0, a->x); /* nope, use (0,1,0) */
+
+		vec3_normalize(&t);
+
+		q->v = t;
+		q->w = 0.f;
+	} else {
+		vec3_t t;
+
+		vec3_cross(&t, a, b);
+		vec3_normalize(&t);
+
+		/* sin^2 t = (1 - cos(2t)) / 2 */
+		float ss = sqrt(.5f * (1.f - cost));
+		vec3_scale(&t, ss);
+		q->v = t;
+
+		/* cos^2 t = (1 + cos(2t) / 2 */
+		q->w = sqrt(.5f * (1.f + cost));
+	}
+}
+
+void quat_mult(quat_t *r, const quat_t *a, const quat_t *b)
+{
+	quat_t ret;
+	vec3_t t;
+
+	ret.w = a->w * b->w - vec3_dot(&a->v, &b->v);
+	vec3_cross(&ret.v, &a->v, &b->v);
+
+	t = a->v;
+	vec3_scale(&t, b->w);
+	vec3_add(&ret.v, &ret.v, &t);
+
+	t = b->v;
+	vec3_scale(&t, a->w);
+	vec3_add(&ret.v, &ret.v, &t);
+
+	*r = ret;
+}
+
+void quat_normalize(quat_t *q)
+{
+	float m = q->w * q->w + vec3_dot(&q->v, &q->v);
+
+	m = 1.f / m;
+
+	q->w *= m;
+	vec3_scale(&q->v, m);
+}
+
+void quat_conj(quat_t *out, const quat_t *in)
+{
+	out->v.x = -in->v.x;
+	out->v.y = -in->v.y;
+	out->v.z = -in->v.z;
+	out->w   =  in->w;
+}
+
+void quat_inverse(quat_t *out, const quat_t *in)
+{
+	float m = 1.f / (in->w * in->w + vec3_dot(&in->v, &in->v));
+
+	out->v.x = -in->v.x * m;
+	out->v.y = -in->v.y * m;
+	out->v.z = -in->v.z * m;
+	out->w   =  in->w   * m;
+}
+
+void quat_rotate(vec3_t *res, const quat_t *q, const vec3_t *v)
+{
+	quat_t tq, itq, tv;
+
+	quat_conj(&itq, q);
+
+	tv = QUAT(0, *v);
+
+	quat_mult(&tq, q, &tv);
+	quat_mult(&tq, &tq, &itq);
+
+	*res = tq.v;
+}
+
+
+void matrix_quat(matrix_t *m, const quat_t *q)
+{
+	float wx, wy, wz, xx, yy, yz, xy, xz, zz, x2, y2, z2;
+
+	x2 = q->v.x + q->v.x; y2 = q->v.y + q->v.y; z2 = q->v.z + q->v.z;
+	xx = q->v.x * x2;   xy = q->v.x * y2;   xz = q->v.x * z2;
+	yy = q->v.y * y2;   yz = q->v.y * z2;   zz = q->v.z * z2;
+	wx = q->w   * x2;   wy = q->w   * y2;   wz = q->w   * z2;
+
+	m->_11 = 1.0 - (yy + zz);
+	m->_21 = xy - wz;
+	m->_31 = xz + wy;
+	m->_41 = 0.0;
+ 
+	m->_12 = xy + wz;
+	m->_22 = 1.0 - (xx + zz);
+	m->_32 = yz - wx;
+	m->_42 = 0.0;
+
+	m->_31 = xz - wy;
+	m->_32 = yz + wx;
+	m->_33 = 1.0 - (xx + yy);
+	m->_34 = 0.0;
+
+	m->_41 = 0;
+	m->_42 = 0;
+	m->_43 = 0;
+	m->_44 = 1;
 }
 
 void matrix_transform(const matrix_t *m, const vec3_t *in, vec3_t *out)
