@@ -106,6 +106,12 @@ void vec3_rotate(vec3_t *out, const vec3_t *v, float angle, const vec3_t *axis)
 	quat_rotate(out, &q, v);
 }
 
+/* epsilon? */
+int vec3_equal(const vec3_t *a, const vec3_t *b)
+{
+	return a->x == b->x && a->y == b->y && a->z == b->z;
+}
+
 
 void quat_axis_angle(quat_t *q, const vec3_t *v, float angle)
 {

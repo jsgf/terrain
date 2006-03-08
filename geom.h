@@ -22,6 +22,7 @@ void  vec3_min(vec3_t *out, const vec3_t *a, const vec3_t *b);
 void  vec3_max(vec3_t *out, const vec3_t *a, const vec3_t *b);
 void  vec3_rotate(vec3_t *out, const vec3_t *v, float angle, const vec3_t *axis);
 void  vec3_majoraxis(vec3_t *out, const vec3_t *v);
+int   vec3_equal(const vec3_t *a, const vec3_t *b);
 
 extern const vec3_t vec_px, vec_nx, vec_py, vec_ny, vec_pz, vec_nz;
 
