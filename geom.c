@@ -188,7 +188,7 @@ void quat_conj(quat_t *out, const quat_t *in)
 	out->w   =  in->w;
 }
 
-void quat_inverse(quat_t *out, const quat_t *in)
+void quat_invert(quat_t *out, const quat_t *in)
 {
 	float m = 1.f / (in->w * in->w + vec3_dot(&in->v, &in->v));
 

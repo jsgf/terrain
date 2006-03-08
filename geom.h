@@ -43,6 +43,7 @@ void quat_normalize(quat_t *q);
 void quat_conj(quat_t *out, const quat_t *in);
 void quat_invert(quat_t *out, const quat_t *in);
 void quat_rotate(vec3_t *res, const quat_t *q, const vec3_t *v);
+void quat_mult(quat_t *r, const quat_t *a, const quat_t *b);
 
 typedef struct plane {
 	vec3_t normal;
