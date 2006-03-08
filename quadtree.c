@@ -1110,36 +1110,7 @@ struct quadtree *quadtree_create(int num_patches, long radius,
 		qt->vtxbufid = 0;
 	}
 
-	/* 
-
-	   Coord:
-	     +Z
-	      | +Y
-	      | / 0
-	      |/___+X
-
-	-y        +---^---++z
-	          |       |
-	          |   2   |
-	          |      .|
-	+y        +---^---++z +++
-		  |       |
-		  |   1   |
-		  |      .|-z
-	+y+-------+---^---+-------+ +z
-	  |      .|       |       |
-	  <   4   |   0   |   5   >
-	  |       |      .|.      |
-	-y+-------+-------+-------+ +z
-	      --- |.      |-z
-	          |   3   |
-	          |       |
-	-y        +---v---+         +z
-
-          -x     -x      +x       +x
-
-
-	 */
+	/* face normals for the cube */
 	static const vec3_t *cube[6] = {
 		&vec_px,
 		&vec_nx,
@@ -1149,15 +1120,16 @@ struct quadtree *quadtree_create(int num_patches, long radius,
 		&vec_nz,
 	};
 
-	/* create basis patches in cube form */
-	struct patch *basis[6];
+	/* create patches as faces of a cube */
+	struct patch *faces[6];
+
 	for(int i = 0; i < 6; i++) {
 		struct patch *p = patch_alloc(qt);
 
 		if (p == NULL)
 			goto out;
 
-		basis[i] = p;
+		faces[i] = p;
 
 		p->i0 = p->j0 = -radius;
 		p->i1 = p->j1 =  radius;
@@ -1167,41 +1139,38 @@ struct quadtree *quadtree_create(int num_patches, long radius,
 		compute_bbox(qt, p);
 	}
 
+	/* For each face, work out the normal of the neighbouring
+	   faces, and link up the neighbours appropriately */
 	for(int i = 0; i < 6; i++) {
-		struct patch *b = basis[i];
-		vec3_t v;
-
-		patch_sample_normal(qt, b, PATCH_SAMPLES/2, PATCH_SAMPLES/2, &v);
-		printf("face=(%g,%g,%g) v(%d,%d)=(%g,%g,%g)\n",
-		       b->face->x, b->face->y, b->face->z,
-		       PATCH_SAMPLES/2, PATCH_SAMPLES/2,
-		       v.x, v.y, v.z);
-
+		struct patch *f = faces[i];
 		vec3_t sides[4];
-		patch_sample_normal(qt, b, PATCH_SAMPLES+1, PATCH_SAMPLES/2, &sides[0]); /* right */
-		patch_sample_normal(qt, b, PATCH_SAMPLES/2, PATCH_SAMPLES+1, &sides[1]); /* up */
-		patch_sample_normal(qt, b, -1, PATCH_SAMPLES/2, &sides[2]); /* left */
-		patch_sample_normal(qt, b, PATCH_SAMPLES/2, -1, &sides[3]); /* down */
+
+		patch_sample_normal(qt, f, PATCH_SAMPLES+1, PATCH_SAMPLES/2, &sides[0]); /* right */
+		patch_sample_normal(qt, f, PATCH_SAMPLES/2, PATCH_SAMPLES+1, &sides[1]); /* up */
+		patch_sample_normal(qt, f, -1, PATCH_SAMPLES/2, &sides[2]); /* left */
+		patch_sample_normal(qt, f, PATCH_SAMPLES/2, -1, &sides[3]); /* down */
 
 		for(int i = 0; i < 4; i++) {
 			vec3_majoraxis(&sides[i], &sides[i]);
 
-			printf("neighbour %d = (%g,%g,%g)\n",
-			       i, sides[i].x, sides[i].y, sides[i].z);
+			if (DEBUG)
+				printf("neighbour %d = (%g,%g,%g)\n",
+				       i, sides[i].x, sides[i].y, sides[i].z);
 
 			for(int j = 0; j < 6; j++) {
-				if (vec3_equal(&sides[i], basis[j]->face)) {
-					printf("  -> face %d\n", j);
+				if (vec3_equal(&sides[i], faces[j]->face)) {
+					if (DEBUG)
+						printf("  -> face %d\n", j);
 
-					b->neigh[i * 2 + 0] = basis[j];
-					b->neigh[i * 2 + 1] = basis[j];
+					f->neigh[i * 2 + 0] = faces[j];
+					f->neigh[i * 2 + 1] = faces[j];
 					break;
 				}
 				assert(j != 5);	/* can't not find a neighbour */
 			}
 		}
 
-		patch_insert_active(qt, b);
+		patch_insert_active(qt, f);
 	}
 
 	return qt;
