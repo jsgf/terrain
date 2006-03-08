@@ -56,11 +56,8 @@ enum patch_sibling {
 };
 
 struct patch {
-	/* Coords of patch edges.  These are integers so that the
-	   exact values are deterministic (useful as seeds for
-	   proceedural generators).  The coords are in 3 dimensions,
-	   but the patch is parallel to one of the axies. */
-	signed int x0, x1, y0, y1, z0, z1;
+	const vec3_t *face;
+	signed long i0, i1, j0, j1;
 
 	box_t bbox;
 

@@ -4,7 +4,7 @@ test: test.o quadtree.o patchidx.o noise.o geom.o
 	$(CC) -o $@ test.o quadtree.o patchidx.o noise.o geom.o -lglut
 
 test.o: quadtree.h font.h noise.h geom.h
-quadtree.o: quadtree.h geom.h
+quadtree.o: quadtree.h quadtree_priv.h geom.h
 noise.o: noise.h
 geom.o: geom.h
 

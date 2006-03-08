@@ -59,14 +59,47 @@ static inline int clamp(int x, int lower, int upper)
 	return x;
 }
 
-static void project_to_sphere(int radius,
-			      long x, long y, long z,
-			      vec3_t *out)
+static void patch_sample_normal(const struct quadtree *qt, const struct patch *p,
+				int si, int sj, vec3_t *v)
 {
-	*out = VEC3(x, y, z);
+	vec3_t iv, jv, rv;
+	int i, j, radius;
 
-	vec3_normalize(out);
-	vec3_scale(out, radius);
+	radius = qt->radius;
+	rv = *p->face;
+
+	if (rv.x + rv.y + rv.z < 0) {
+		si = PATCH_SAMPLES - si;
+		//sj = PATCH_SAMPLES - sj;
+		vec3_abs(&rv);
+		radius = -radius;
+	}
+
+	i = p->i0 + (p->i1 - p->i0) * si / PATCH_SAMPLES;
+	j = p->j0 + (p->j1 - p->j0) * sj / PATCH_SAMPLES;
+
+	iv = VEC3(rv.z, rv.x, rv.y);
+	vec3_scale(&iv, i);
+
+	jv = VEC3(rv.y, rv.z, rv.x);
+	vec3_scale(&jv, j);
+
+	vec3_scale(&rv, radius);
+
+	*v = rv;
+	vec3_add(v, v, &iv);
+	vec3_add(v, v, &jv);
+
+	vec3_normalize(v);
+}
+
+static void patch_corner_normals(const struct quadtree *qt, const struct patch *p,
+				 vec3_t v[4])
+{
+	patch_sample_normal(qt, p, 0, 0, &v[0]);
+	patch_sample_normal(qt, p, PATCH_SAMPLES, 0, &v[1]);
+	patch_sample_normal(qt, p, PATCH_SAMPLES, PATCH_SAMPLES, &v[2]);
+	patch_sample_normal(qt, p, 0, PATCH_SAMPLES, &v[3]);
 }
 
 
@@ -444,7 +477,8 @@ static struct patch *find_lowest(struct quadtree *qt)
 	return ret;
 }
 
-static void patch_init(struct patch *p, int level, unsigned id)
+static void patch_init(struct patch *p, int level, unsigned id,
+		       const vec3_t *face)
 {
 	assert((p->flags & PF_ACTIVE) == 0);
 
@@ -491,6 +525,7 @@ static void patch_init(struct patch *p, int level, unsigned id)
 	p->level = level;
 	p->id = id;
 	p->phase = 0;
+	p->face = face;
 
 	p->priority = 0.f;
 	p->error = 0.f;
@@ -578,58 +613,23 @@ static void patch_remove_freelist(struct quadtree *qt, struct patch *p)
 
 static void compute_bbox(const struct quadtree *qt, struct patch *p)
 {
-	vec3_t sph[8];
-	long radius = qt->radius;
+	vec3_t sph[5];
 
-	if (p->z0 == p->z1) {
-		long size = abs(p->x0 - p->x1) / 2;
-		assert(size == abs(p->y0 - p->y1) / 2);
+	patch_corner_normals(qt, p, sph);
+	patch_sample_normal(qt, p, PATCH_SAMPLES/2, PATCH_SAMPLES/2, &sph[4]);
 
-		project_to_sphere(radius, p->x0, p->y0, p->z0 - size, &sph[0]);
-		project_to_sphere(radius, p->x1, p->y0, p->z0 - size, &sph[1]);
-		project_to_sphere(radius, p->x1, p->y1, p->z0 - size, &sph[2]);
-		project_to_sphere(radius, p->x0, p->y1, p->z0 - size, &sph[3]);
+	for(int i = 0; i < 4; i++)
+		vec3_scale(&sph[i], qt->radius * .9);
 
-		project_to_sphere(radius, p->x0, p->y0, p->z0 + size, &sph[4]);
-		project_to_sphere(radius, p->x1, p->y0, p->z0 + size, &sph[5]);
-		project_to_sphere(radius, p->x1, p->y1, p->z0 + size, &sph[6]);
-		project_to_sphere(radius, p->x0, p->y1, p->z0 + size, &sph[7]);
-	} else if (p->y0 == p->y1) {
-		long size = abs(p->x0 - p->x1) / 2;
-		assert(size == abs(p->z0 - p->z1) / 2);
-
-		project_to_sphere(radius, p->x0, p->y0 - size, p->z0, &sph[0]);
-		project_to_sphere(radius, p->x1, p->y0 - size, p->z0, &sph[1]);
-		project_to_sphere(radius, p->x1, p->y0 - size, p->z1, &sph[2]);
-		project_to_sphere(radius, p->x0, p->y0 - size, p->z1, &sph[3]);
-
-		project_to_sphere(radius, p->x0, p->y0 + size, p->z0, &sph[4]);
-		project_to_sphere(radius, p->x1, p->y0 + size, p->z0, &sph[5]);
-		project_to_sphere(radius, p->x1, p->y0 + size, p->z1, &sph[6]);
-		project_to_sphere(radius, p->x0, p->y0 + size, p->z1, &sph[7]);
-	} else if (p->x0 == p->x1) {
-		long size = abs(p->y0 - p->y1) / 2;
-		assert(size == abs(p->z0 - p->z1) / 2);
-
-		project_to_sphere(radius, p->x0 - size, p->y0, p->z0, &sph[0]);
-		project_to_sphere(radius, p->x0 - size, p->y1, p->z0, &sph[1]);
-		project_to_sphere(radius, p->x0 - size, p->y1, p->z1, &sph[2]);
-		project_to_sphere(radius, p->x0 - size, p->y0, p->z1, &sph[3]);
-
-		project_to_sphere(radius, p->x0 + size, p->y0, p->z0, &sph[4]);
-		project_to_sphere(radius, p->x0 + size, p->y1, p->z0, &sph[5]);
-		project_to_sphere(radius, p->x0 + size, p->y1, p->z1, &sph[6]);
-		project_to_sphere(radius, p->x0 + size, p->y0, p->z1, &sph[7]);
-	} else
-		abort();
+	vec3_scale(&sph[4], qt->radius * 1.1);
 
 	p->bbox.centre = VEC3(0,0,0);
-	for(int i = 0; i < 8; i++)
+	for(int i = 0; i < sizeof(sph)/sizeof(*sph); i++)
 		vec3_add(&p->bbox.centre, &p->bbox.centre, &sph[i]);
-	vec3_scale(&p->bbox.centre, 1./8);
+	vec3_scale(&p->bbox.centre, 1. / (sizeof(sph)/sizeof(*sph)));
 
 	p->bbox.extent = VEC3(0,0,0);
-	for(int i = 0; i < 8; i++) {
+	for(int i = 0; i < sizeof(sph)/sizeof(*sph); i++) {
 		vec3_t d;
 		vec3_sub(&d, &p->bbox.centre, &sph[i]);
 		vec3_abs(&d);
@@ -701,8 +701,9 @@ static int patch_merge(struct quadtree *qt, struct patch *p,
 		assert(p->flags & PF_ACTIVE);
 
 		if (p->pinned) {
-			printf("merge %s failed: pinned\n",
-			       patch_name(p, buf));
+			if (0)
+				printf("merge %s failed: pinned\n",
+				       patch_name(p, buf));
 			goto out_fail;
 		}
 
@@ -754,6 +755,7 @@ static int patch_merge(struct quadtree *qt, struct patch *p,
 	if (p->parent != NULL) {
 		parent = p->parent;		/* cached parent */
 
+		assert(parent->face == p->face);
 		patch_remove_freelist(qt, parent);
 	} else {
 		unsigned long id = parentid(p, 1);
@@ -768,14 +770,12 @@ static int patch_merge(struct quadtree *qt, struct patch *p,
 		assert(parent != NULL);
 		assert(!on_freelist(qt, parent));
 
-		patch_init(parent, level, id);
+		patch_init(parent, level, id, p->face);
 		
-		parent->x0 = sib[0]->x0;
-		parent->x1 = sib[2]->x1;
-		parent->y0 = sib[0]->y0;
-		parent->y1 = sib[2]->y1;
-		parent->z0 = sib[0]->z0;
-		parent->z1 = sib[2]->z1;
+		parent->i0 = sib[0]->i0;
+		parent->j0 = sib[0]->j0;
+		parent->i1 = sib[2]->i1;
+		parent->j1 = sib[2]->j1;
 
 		compute_bbox(qt, parent);
 	}
@@ -877,9 +877,7 @@ static int patch_split(struct quadtree *qt, struct patch *parent)
 	}
 
 	/* don't split if we're getting too small */
-	if ((parent->x0 != parent->x1 && abs(parent->x0 - parent->x1) / 2 < PATCH_SAMPLES) ||
-	    (parent->y0 != parent->y1 && abs(parent->y0 - parent->y1) / 2 < PATCH_SAMPLES) ||
-	    (parent->z0 != parent->z1 && abs(parent->z0 - parent->z1) / 2 < PATCH_SAMPLES)) {
+	if ((parent->j1 - parent->j0) / 2 < PATCH_SAMPLES) {
 		parent->phase = qt->phase;
 		return 0;
 	}
@@ -901,7 +899,8 @@ static int patch_split(struct quadtree *qt, struct patch *parent)
 			k[i] = patch_alloc(qt);
 			if (k[i] == NULL)
 				goto out_fail;
-			patch_init(k[i], parent->level + 1, childid(parent->id, i));
+			patch_init(k[i], parent->level + 1,
+				   childid(parent->id, i), parent->face);
 
 			k[i]->parent = parent;
 			parent->kids[i] = k[i];
@@ -926,6 +925,7 @@ static int patch_split(struct quadtree *qt, struct patch *parent)
 		k[i]->phase = parent->phase;
 
 		assert(k[i]->parent == parent);
+		assert(k[i]->face == parent->face);
 	}
 
 	assert(parent->flags & PF_ACTIVE);
@@ -959,61 +959,27 @@ static int patch_split(struct quadtree *qt, struct patch *parent)
 	for(int i = 0; i < 4; i++)
 		backlink_neighbours(k[i], parent);
 
-	signed int mx = (parent->x0 + parent->x1) / 2;
-	signed int my = (parent->y0 + parent->y1) / 2;
-	signed int mz = (parent->z0 + parent->z1) / 2;
+	int mi = (parent->i0 + parent->i1) / 2;
+	int mj = (parent->j0 + parent->j1) / 2;
+	k[0]->i0 = parent->i0;
+	k[0]->i1 = mi;
+	k[0]->j0 = parent->j0;
+	k[0]->j1 = mj;
 
-	/* subdivide the coords */
-	if (parent->x0 == parent->x1) { /* left, right */
-		k[0]->x0 = parent->x0;    k[0]->x1 = parent->x0;
-		k[0]->y0 = parent->y0;    k[0]->y1 = my;
-		k[0]->z0 = parent->z0;    k[0]->z1 = mz;
+	k[1]->i0 = mi;
+	k[1]->i1 = parent->i1;
+	k[1]->j0 = parent->j0;
+	k[1]->j1 = mj;
 
-		k[1]->x0 = parent->x0;    k[1]->x1 = parent->x0;
-		k[1]->y0 = my;            k[1]->y1 = parent->y1;
-		k[1]->z0 = parent->z0;    k[1]->z1 = mz;
+	k[2]->i0 = mi;
+	k[2]->i1 = parent->i1;
+	k[2]->j0 = mj;
+	k[2]->j1 = parent->j1;
 
-		k[2]->x0 = parent->x0;    k[2]->x1 = parent->x0;
-		k[2]->y0 = my;            k[2]->y1 = parent->y1;
-		k[2]->z0 = mz;            k[2]->z1 = parent->z1;
-
-		k[3]->x0 = parent->x0;    k[3]->x1 = parent->x0;;
-		k[3]->y0 = parent->y0;    k[3]->y1 = my;
-		k[3]->z0 = mz;            k[3]->z1 = parent->z1;
-	} else if (parent->y0 == parent->y1) { /* front, back */
-		k[0]->x0 = parent->x0;    k[0]->x1 = mx;
-		k[0]->y0 = parent->y0;    k[0]->y1 = parent->y0;
-		k[0]->z0 = parent->z0;    k[0]->z1 = mz;
-
-		k[1]->x0 = mx;            k[1]->x1 = parent->x1;
-		k[1]->y0 = parent->y0;    k[1]->y1 = parent->y0;
-		k[1]->z0 = parent->z0;    k[1]->z1 = mz;
-
-		k[2]->x0 = mx;            k[2]->x1 = parent->x1;
-		k[2]->y0 = parent->y0;    k[2]->y1 = parent->y0;
-		k[2]->z0 = mz;            k[2]->z1 = parent->z1;
-
-		k[3]->x0 = parent->x0;    k[3]->x1 = mx;
-		k[3]->y0 = parent->y0;    k[3]->y1 = parent->y0;
-		k[3]->z0 = mz;            k[3]->z1 = parent->z1;
-	} else if (parent->z0 == parent->z1) { /* top, bottom */
-		k[0]->x0 = parent->x0;    k[0]->x1 = mx;
-		k[0]->y0 = parent->y0;    k[0]->y1 = my;
-		k[0]->z0 = parent->z0;    k[0]->z1 = parent->z0;
-
-		k[1]->x0 = mx;            k[1]->x1 = parent->x1;
-		k[1]->y0 = parent->y0;    k[1]->y1 = my;
-		k[1]->z0 = parent->z0;    k[1]->z1 = parent->z0;
-
-		k[2]->x0 = mx;            k[2]->x1 = parent->x1;
-		k[2]->y0 = my;            k[2]->y1 = parent->y1;
-		k[2]->z0 = parent->z0;    k[2]->z1 = parent->z0;
-
-		k[3]->x0 = parent->x0;    k[3]->x1 = mx;
-		k[3]->y0 = my;            k[3]->y1 = parent->y1;
-		k[3]->z0 = parent->z0;    k[3]->z1 = parent->z0;
-	} else
-		abort();
+	k[3]->i0 = parent->i0;
+	k[3]->i1 = mi;
+	k[3]->j0 = mj;
+	k[3]->j1 = parent->j1;
 
 	for(int i = 0; i < 4; i++)
 		compute_bbox(qt, k[i]);
@@ -1046,7 +1012,8 @@ static int patch_split(struct quadtree *qt, struct patch *parent)
 		if (k[i]) {
 			assert(k[i]->pinned > 0);
 			k[i]->pinned--;
-			patch_init(k[i], -1, 0);
+			k[i]->flags = PF_UNUSED;
+			patch_init(k[i], -1, 0, NULL);
 			patch_free(qt, k[i]);
 		}
 	return 0;
@@ -1173,16 +1140,13 @@ struct quadtree *quadtree_create(int num_patches, long radius,
 
 
 	 */
-	static const struct cube {
-		int x0, x1, y0, y1, z0, z1;
-		int neigh[4]; /* right, up, left, down */
-	} cube[6] = {
-		{  1, -1,  -1,  1,  -1, -1,  { 4, 1, 5, 3 } }, /* 0 */
-		{  1, -1,   1,  1,  -1,  1,  { 4, 2, 5, 0 } }, /* 1 */
-		{  1, -1,   1, -1,   1,  1,  { 4, 3, 5, 1 } }, /* 2 */
-		{ -1,  1,  -1, -1,  -1,  1,  { 5, 2, 4, 0 } }, /* 3 */
-		{ -1, -1,   1, -1,  -1,  1,  { 3, 2, 1, 0 } }, /* 4 */
-		{  1,  1,  -1,  1,  -1,  1,  { 1, 2, 3, 0 } }, /* 5 */
+	static const vec3_t *cube[6] = {
+		&vec_px,
+		&vec_nx,
+		&vec_py,
+		&vec_ny,
+		&vec_pz,
+		&vec_nz,
 	};
 
 	/* create basis patches in cube form */
@@ -1194,28 +1158,48 @@ struct quadtree *quadtree_create(int num_patches, long radius,
 			goto out;
 
 		basis[i] = p;
-		patch_init(p, 0, i);
+
+		p->i0 = p->j0 = -radius;
+		p->i1 = p->j1 =  radius;
+
+		patch_init(p, 0, i, cube[i]);
+
+		compute_bbox(qt, p);
 	}
 
 	for(int i = 0; i < 6; i++) {
 		struct patch *b = basis[i];
-		const struct cube *c = &cube[i];
+		vec3_t v;
 
-		b->x0 = c->x0 * radius;
-		b->x1 = c->x1 * radius;
+		patch_sample_normal(qt, b, PATCH_SAMPLES/2, PATCH_SAMPLES/2, &v);
+		printf("face=(%g,%g,%g) v(%d,%d)=(%g,%g,%g)\n",
+		       b->face->x, b->face->y, b->face->z,
+		       PATCH_SAMPLES/2, PATCH_SAMPLES/2,
+		       v.x, v.y, v.z);
 
-		b->y0 = c->y0 * radius;
-		b->y1 = c->y1 * radius;
+		vec3_t sides[4];
+		patch_sample_normal(qt, b, PATCH_SAMPLES+1, PATCH_SAMPLES/2, &sides[0]); /* right */
+		patch_sample_normal(qt, b, PATCH_SAMPLES/2, PATCH_SAMPLES+1, &sides[1]); /* up */
+		patch_sample_normal(qt, b, -1, PATCH_SAMPLES/2, &sides[2]); /* left */
+		patch_sample_normal(qt, b, PATCH_SAMPLES/2, -1, &sides[3]); /* down */
 
-		b->z0 = c->z0 * radius;
-		b->z1 = c->z1 * radius;
+		for(int i = 0; i < 4; i++) {
+			vec3_majoraxis(&sides[i], &sides[i]);
 
-		for(int j = 0; j < 4; j++) {
-			b->neigh[j * 2 + 0] = basis[c->neigh[j]];
-			b->neigh[j * 2 + 1] = basis[c->neigh[j]];
+			printf("neighbour %d = (%g,%g,%g)\n",
+			       i, sides[i].x, sides[i].y, sides[i].z);
+
+			for(int j = 0; j < 6; j++) {
+				if (vec3_equal(&sides[i], basis[j]->face)) {
+					printf("  -> face %d\n", j);
+
+					b->neigh[i * 2 + 0] = basis[j];
+					b->neigh[i * 2 + 1] = basis[j];
+					break;
+				}
+				assert(j != 5);	/* can't not find a neighbour */
+			}
 		}
-
-		compute_bbox(qt, b);
 
 		patch_insert_active(qt, b);
 	}
@@ -1322,37 +1306,76 @@ static void patch_bbox(const struct patch *p)
 
 }
 
-static void patch_outline(const struct patch *p, long radius)
+static void patch_outline(const struct quadtree *qt, const struct patch *p)
 {
 	vec3_t sph[4];
+	int radius = qt->radius;
 
-	if (p->z0 == p->z1 ||
-	    p->y0 == p->y1) {
-		project_to_sphere(radius, p->x0, p->y0, p->z0, &sph[0]);
-		project_to_sphere(radius, p->x1, p->y0, p->z0, &sph[1]);
-		project_to_sphere(radius, p->x1, p->y1, p->z1, &sph[2]);
-		project_to_sphere(radius, p->x0, p->y1, p->z1, &sph[3]);
-	} else {
-		project_to_sphere(radius, p->x0, p->y0, p->z0, &sph[0]);
-		project_to_sphere(radius, p->x0, p->y1, p->z0, &sph[1]);
-		project_to_sphere(radius, p->x0, p->y1, p->z1, &sph[2]);
-		project_to_sphere(radius, p->x0, p->y0, p->z1, &sph[3]);
-	}
+	patch_corner_normals(qt, p, sph);
+	for(int i = 0; i < 4; i++)
+		vec3_scale(&sph[i], radius);
 
 	glBegin(GL_LINE_LOOP);
-	  glVertex3fv(sph[0].v);
-	  glVertex3fv(sph[1].v);
-	  glVertex3fv(sph[2].v);
-	  glVertex3fv(sph[3].v);
+	for(int i = 0; i < 4; i++)
+		glVertex3fv(sph[i].v);
 	glEnd();
 }
 
-static void update_prio(struct patch *p,
-			long radius,
+static float projected_quad_area(const struct quadtree *qt, const struct patch *p,
+				 const matrix_t *mat,
+				 int i0, int i1, int j0, int j1)
+{
+	vec3_t v[4];
+	vec3_t proj[4];
+
+	patch_sample_normal(qt, p, i0, j0, &v[0]);
+	patch_sample_normal(qt, p, i0, j1, &v[1]);
+	patch_sample_normal(qt, p, i1, j1, &v[2]);
+	patch_sample_normal(qt, p, i1, j0, &v[3]);
+
+	for(int i = 0; i < 4; i++) {
+		static const vec3_t half = VEC3i(.5,.5,.5);
+		char buf[40];
+
+		vec3_scale(&v[i], qt->radius);
+		matrix_project(mat, &v[i], &proj[i]);
+
+		vec3_scale(&proj[i], .5);
+		vec3_add(&proj[i], &proj[i], &half);
+
+		if (0)
+			printf("%s: %d-%d %d-%d vtx:%d = %g,%g\n",
+			       patch_name(p, buf), i0, i1, j0, j1, i, proj[i].x, proj[i].y);
+	}
+
+	float area = 0.f;
+
+	for(unsigned i = 0; i < 4; i++) {
+		unsigned n = (i+1) % 4;
+		area += (proj[i].x * proj[n].y) -
+			(proj[n].x * proj[i].y);
+	}
+
+	area = -area;		/* hm, get an even number of sign bugs */
+
+	if (0)
+		printf("    %d-%d %d-%d area=%g\n",
+		       i0, i1, j0, j1, area * .5);
+
+	if (area < 0)
+		area = 0;
+
+	return area * 0.5f;
+}
+
+static void update_prio(const struct quadtree *qt,
+			struct patch *p,
 			const matrix_t *mat,
 			plane_t cullplanes[7],
 			const vec3_t *camera)
 {
+	long radius = qt->radius;
+
 	p->flags &= ~PF_CULLED;
 
 	if (box_cull(&p->bbox, cullplanes, 7) == CULL_OUT) {
@@ -1366,51 +1389,16 @@ static void update_prio(struct patch *p,
 		p->priority = vec3_magnitude(&distv) / (2.f * radius);
 		p->error = 0.f;
 	} else {
-		vec3_t sph[4];
-		vec3_t proj[4];
-
-		if (p->z0 == p->z1 ||
-		    p->y0 == p->y1) {
-			project_to_sphere(radius, p->x0, p->y0, p->z0, &sph[0]);
-			project_to_sphere(radius, p->x1, p->y0, p->z0, &sph[1]);
-			project_to_sphere(radius, p->x1, p->y1, p->z1, &sph[2]);
-			project_to_sphere(radius, p->x0, p->y1, p->z1, &sph[3]);
-		} else {
-			project_to_sphere(radius, p->x0, p->y0, p->z0, &sph[0]);
-			project_to_sphere(radius, p->x0, p->y1, p->z0, &sph[1]);
-			project_to_sphere(radius, p->x0, p->y1, p->z1, &sph[2]);
-			project_to_sphere(radius, p->x0, p->y0, p->z1, &sph[3]);
-		}
-
-		/* project into normalized 0-1 coord space, so area is
-		   computed directly as a fraction of viewport area */
-		for(int i = 0; i < 4; i++) {
-			matrix_project(mat, &sph[i], &proj[i]);
-			proj[i].x = proj[i].x * .5 + .5;
-			proj[i].y = proj[i].y * .5 + .5;
-		}
-
-		if (ANNOTATE) {
-			glPushAttrib(GL_ENABLE_BIT);
-			glDisable(GL_LIGHTING);
-			glDisable(GL_TEXTURE_2D);
-
-			glColor3f(1,1,1);
-			patch_outline(p, radius);
-
-			glPopAttrib();
-		}
-
 		float area = 0.f;
 
-		for(unsigned i = 0; i < 4; i++) {
-			unsigned n = (i+1) % 4;
-			area += (proj[i].x * proj[n].y) -
-				(proj[n].x * proj[i].y);
-		}
-
-		area = fabsf(area * 0.5f);
-
+		area += projected_quad_area(qt, p, mat,
+					    0, PATCH_SAMPLES/2, 0, PATCH_SAMPLES/2);
+		area += projected_quad_area(qt, p, mat,
+					    PATCH_SAMPLES/2, PATCH_SAMPLES, 0, PATCH_SAMPLES/2);
+		area += projected_quad_area(qt, p, mat,
+					    PATCH_SAMPLES/2, PATCH_SAMPLES, PATCH_SAMPLES/2, PATCH_SAMPLES);
+		area += projected_quad_area(qt, p, mat,
+					    0, PATCH_SAMPLES/2, PATCH_SAMPLES/2, PATCH_SAMPLES);
 		p->priority = area;
 		if (fabsf(area - TARGETSIZE) > MARGIN)
 			p->error += area - TARGETSIZE;
@@ -1536,7 +1524,7 @@ void quadtree_update_view(struct quadtree *qt, const matrix_t *mat,
 
 		p->flags &= ~(PF_CULLED | PF_ACTIVE | PF_LATECULL);
 
-		update_prio(p, qt->radius, mat, cullplanes, camerapos);
+		update_prio(qt, p, mat, cullplanes, camerapos);
 
 		patch_insert_active(qt, p);
 	}
@@ -1642,32 +1630,6 @@ static unsigned neighbour_class(const struct patch *p)
 	return ud * 3 + lr;
 }
 
-static void set_vertex(struct quadtree *qt, struct vertex *v,
-		       int i, int j,
-		       long x, long y, long z)
-{
-	vec3_t ov, ev;
-	elevation_t elev;
-
-	project_to_sphere(qt->radius,
-			  x, y, z,
-			  &ov);
-					
-	elev = (*qt->landscape)(&ov, v->col);
-
-	ev = ov;
-	vec3_normalize(&ev);
-	vec3_scale(&ev, elev);
-	vec3_add(&ev, &ev, &ov);
-
-	v->s = i;					
-	v->t = PATCH_SAMPLES - j;
-
-	v->x = ev.x;
-	v->y = ev.y;
-	v->z = ev.z;
-}
-
 static void generate_geom(struct quadtree *qt)
 {
 	struct list_head *pp;
@@ -1691,56 +1653,24 @@ static void generate_geom(struct quadtree *qt)
 
 		struct vertex samples[MESH_SAMPLES * MESH_SAMPLES];
 
-		if (p->x0 == p->x1) {
-			int dy = p->y1 - p->y0;
-			int dz = p->z1 - p->z0;
+		for(int j = 0; j < MESH_SAMPLES; j++) {
+			for(int i = 0; i < MESH_SAMPLES; i++) {
+				vec3_t sv;
+				struct vertex *v = &samples[j * MESH_SAMPLES + i];
+				elevation_t elev;
 
-			for(int j = 0; j < MESH_SAMPLES; j++) {
-				for(int i = 0; i < MESH_SAMPLES; i++) {
-					long x, y, z;
-					struct vertex *v = &samples[j * MESH_SAMPLES + i];
+				patch_sample_normal(qt, p, i, j, &sv);
 
-					x = p->x0;
-					y = p->y0 + (dy * i) / PATCH_SAMPLES;
-					z = p->z0 + (dz * j) / PATCH_SAMPLES;
+				elev = (*qt->landscape)(&sv, v->col);
 
-					memcpy(v->col, p->col, 4);
-					set_vertex(qt, v, i, j, x, y, z);
-				}
-			}
-		} else if (p->y0 == p->y1) {
-			int dx = p->x1 - p->x0;
-			int dz = p->z1 - p->z0;
+				vec3_scale(&sv, qt->radius + elev);
 
-			for(int j = 0; j < MESH_SAMPLES; j++) {
-				for(int i = 0; i < MESH_SAMPLES; i++) {
-					long x, y, z;
-					struct vertex *v = &samples[j * MESH_SAMPLES + i];
+				v->s = i;
+				v->t = PATCH_SAMPLES - j;
 
-					x = p->x0 + (dx * i) / PATCH_SAMPLES;
-					y = p->y0;
-					z = p->z0 + (dz * j) / PATCH_SAMPLES;
-
-					memcpy(v->col, p->col, 4);
-					set_vertex(qt, v, i, j, x, y, z);
-				}
-			}
-		} else if (p->z0 == p->z1) {
-			int dx = p->x1 - p->x0;
-			int dy = p->y1 - p->y0;
-
-			for(int j = 0; j < MESH_SAMPLES; j++) {
-				for(int i = 0; i < MESH_SAMPLES; i++) {
-					long x, y, z;
-					struct vertex *v = &samples[j * MESH_SAMPLES + i];
-
-					x = p->x0 + (dx * i) / PATCH_SAMPLES;
-					y = p->y0 + (dy * j) / PATCH_SAMPLES;
-					z = p->z0;
-
-					memcpy(v->col, p->col, 4);
-					set_vertex(qt, v, i, j, x, y, z);
-				}
+				v->x = sv.x;
+				v->y = sv.y;
+				v->z = sv.z;
 			}
 		}
 
@@ -1898,7 +1828,7 @@ void quadtree_render(const struct quadtree *qt, void (*prerender)(const struct p
 				glColor3f(p->priority, p->priority, 0);
 			else
 				glColor3f(p->priority, p->priority, p->priority);
-			patch_outline(p, qt->radius);
+			patch_outline(qt, p);
 
 			glColor3f(.75,0,0);
 			//patch_bbox(p);
