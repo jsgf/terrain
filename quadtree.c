@@ -1629,6 +1629,28 @@ void quadtree_update_view(struct quadtree *qt, const matrix_t *mat,
 	generate_geom(qt);
 }
 
+
+static void compute_vertex(const struct quadtree *qt, const struct patch *p,
+			   int i, int j, struct vertex *vtx)
+{
+	vec3_t sv;
+	elevation_t elev;
+
+	patch_sample_normal(qt, p, i, j, &sv);
+
+	elev = (*qt->landscape)(&sv, vtx->col);
+
+	vec3_scale(&sv, qt->radius + elev);
+
+	vtx->s = i;
+	vtx->t = PATCH_SAMPLES - j;
+
+	vtx->x = sv.x;
+	vtx->y = sv.y;
+	vtx->z = sv.z;
+}
+
+
 static void generate_geom(const struct quadtree *qt)
 {
 	struct list_head *pp;
@@ -1654,22 +1676,9 @@ static void generate_geom(const struct quadtree *qt)
 
 		for(int j = 0; j < MESH_SAMPLES; j++) {
 			for(int i = 0; i < MESH_SAMPLES; i++) {
-				vec3_t sv;
 				struct vertex *v = &samples[j * MESH_SAMPLES + i];
-				elevation_t elev;
 
-				patch_sample_normal(qt, p, i, j, &sv);
-
-				elev = (*qt->landscape)(&sv, v->col);
-
-				vec3_scale(&sv, qt->radius + elev);
-
-				v->s = i;
-				v->t = PATCH_SAMPLES - j;
-
-				v->x = sv.x;
-				v->y = sv.y;
-				v->z = sv.z;
+				compute_vertex(qt, p, i, j, v);
 
 				if (ANNOTATE) {
 					if (i == 0) { /* left - red*/
@@ -1698,17 +1707,31 @@ static void generate_geom(const struct quadtree *qt)
 		}
 
 		/* quick and dirty normals */
-		for(int y = 0; y < PATCH_SAMPLES; y++) {
-			for(int x = 0; x < PATCH_SAMPLES; x++) {
-				struct vertex *v = &samples[y * MESH_SAMPLES + x];
-				struct vertex *vx = &samples[y * MESH_SAMPLES + x + 1];
-				struct vertex *vy = &samples[(y+1) * MESH_SAMPLES + x];
-				vec3_t vecx = VEC3(vx->x - v->x,
-						   vx->y - v->y,
-						   vx->z - v->z);
-				vec3_t vecy = VEC3(vy->x - v->x,
-						   vy->y - v->y,
-						   vy->z - v->z);
+		for(int j = 0; j < MESH_SAMPLES; j++) {
+			for(int i = 0; i < MESH_SAMPLES; i++) {
+				struct vertex *v = &samples[j * MESH_SAMPLES + i];
+				struct vertex *vi;
+				struct vertex *vj;
+				struct vertex a, b;
+
+				if (i >= MESH_SAMPLES-1) {
+					vi = &a;
+					compute_vertex(qt, p, i+1, j, vi);
+				} else
+					vi = &samples[j * MESH_SAMPLES + (i + 1)];
+
+				if (j >= MESH_SAMPLES-1) {
+					vj = &b;
+					compute_vertex(qt, p, i, j+1, vj);
+				} else
+					vj = &samples[(j + 1) * MESH_SAMPLES + i];
+
+				vec3_t vecx = VEC3(vi->x - v->x,
+						   vi->y - v->y,
+						   vi->z - v->z);
+				vec3_t vecy = VEC3(vj->x - v->x,
+						   vj->y - v->y,
+						   vj->z - v->z);
 				vec3_t cross;
 
 				vec3_cross(&cross, &vecx, &vecy);
@@ -1719,30 +1742,6 @@ static void generate_geom(const struct quadtree *qt)
 				v->nz = cross.z * 127;
 			}
 		}
-
-		/* just make edge normals copies of their neighbours */
-		for(int x = 0; x < PATCH_SAMPLES; x++) {
-			struct vertex *a, *b;
-
-			a = &samples[PATCH_SAMPLES * MESH_SAMPLES + x];
-			b = a - (PATCH_SAMPLES+1);
-
-			a->nx = b->nx;
-			a->ny = b->ny;
-			a->nz = b->nz;
-		}
-
-		for(int y = 0; y < PATCH_SAMPLES+1; y++) {
-			struct vertex *a, *b;
-
-			a = &samples[y * MESH_SAMPLES + PATCH_SAMPLES];
-			b = a - 1;
-
-			a->nx = b->nx;
-			a->ny = b->ny;
-			a->nz = b->nz;
-		}
-
 
 		if (USE_INDEX) {
 			if (have_vbo)
