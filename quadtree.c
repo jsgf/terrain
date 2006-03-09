@@ -78,8 +78,12 @@ static void patch_sample_normal(const struct quadtree *qt, const struct patch *p
 	rv = *p->face;
 
 	if (patch_flip(p->face)) {
-		si = PATCH_SAMPLES - si;
-		//sj = PATCH_SAMPLES - sj;
+		/* for -ve faces, transpose i&j to make the patch
+		   triangles outward-facing */
+		int t = si;
+		si = sj;
+		sj = t;
+
 		vec3_abs(&rv);
 		radius = -radius;
 	}
@@ -109,6 +113,36 @@ static void patch_corner_normals(const struct quadtree *qt, const struct patch *
 	patch_sample_normal(qt, p, PATCH_SAMPLES, 0, &v[1]);
 	patch_sample_normal(qt, p, PATCH_SAMPLES, PATCH_SAMPLES, &v[2]);
 	patch_sample_normal(qt, p, 0, PATCH_SAMPLES, &v[3]);
+}
+
+/* Return the a classification of a patch's neighbours to determine
+   which need special handling in generating a mesh.  The return is an
+   index into patch_indices[], and must match genpatchidx.c. */
+static unsigned neighbour_class(const struct patch *p)
+{
+	unsigned ud = 0;
+	unsigned lr = 0;
+
+	lr |= (p->neigh[PN_RIGHT]->level < p->level) << 0;
+	lr |= (p->neigh[PN_LEFT ]->level < p->level) << 1;
+
+	ud |= (p->neigh[PN_DOWN ]->level < p->level) << 0;
+	ud |= (p->neigh[PN_UP   ]->level < p->level) << 1;
+
+	if (patch_flip(p->face)) {
+		/* patch_sample_normal() transposes i&j for -ve faces */
+		unsigned t = lr;
+		lr = ud;
+		ud = t;
+
+		/* swap l<->r and u<->d */
+		lr = ((lr | (lr << 2)) >> 1) & 3;
+		ud = ((ud | (ud << 2)) >> 1) & 3;
+	}
+	assert(lr < 3);
+	assert(ud < 3);
+
+	return ud * 3 + lr;
 }
 
 
@@ -1167,13 +1201,15 @@ struct quadtree *quadtree_create(int num_patches, long radius,
 		for(int i = 0; i < 4; i++) {
 			vec3_majoraxis(&sides[i], &sides[i]);
 
-			if (DEBUG)
-				printf("neighbour %d = (%g,%g,%g)\n",
-				       i, sides[i].x, sides[i].y, sides[i].z);
+			if (1 || DEBUG) {
+				char buf[40];
+				printf("%s: neighbour %d = (%g,%g,%g)\n",
+				       patch_name(f, buf), i, sides[i].x, sides[i].y, sides[i].z);
+			}
 
 			for(int j = 0; j < 6; j++) {
 				if (vec3_equal(&sides[i], faces[j]->face)) {
-					if (DEBUG)
+					if (1 || DEBUG)
 						printf("  -> face %d\n", j);
 
 					f->neigh[i * 2 + 0] = faces[j];
@@ -1396,7 +1432,7 @@ static void update_prio(const struct quadtree *qt,
 	}
 }
 
-static void generate_geom(struct quadtree *qt);
+static void generate_geom(const struct quadtree *qt);
 
 static int mergesmall(const struct patch *p)
 {
@@ -1593,32 +1629,7 @@ void quadtree_update_view(struct quadtree *qt, const matrix_t *mat,
 	generate_geom(qt);
 }
 
-/* Return the a classification of a patch's neighbours to determine
-   which need special handling in generating a mesh.  The return is an
-   index into patch_indices[], and must match genpatchidx.c. */
-static unsigned neighbour_class(const struct patch *p)
-{
-	unsigned ud = 0;
-	unsigned lr = 0;
-
-	if (patch_flip(p->face)) {
-		/* patch_sample_normal() reverses the i-axis for -ve faces */
-		lr |= (p->neigh[PN_LEFT ]->level < p->level) << 0;
-		lr |= (p->neigh[PN_RIGHT]->level < p->level) << 1;
-	} else {
-		lr |= (p->neigh[PN_RIGHT]->level < p->level) << 0;
-		lr |= (p->neigh[PN_LEFT ]->level < p->level) << 1;
-	}
-	ud |= (p->neigh[PN_DOWN ]->level < p->level) << 0;
-	ud |= (p->neigh[PN_UP   ]->level < p->level) << 1;
-
-	assert(lr < 3);
-	assert(ud < 3);
-
-	return ud * 3 + lr;
-}
-
-static void generate_geom(struct quadtree *qt)
+static void generate_geom(const struct quadtree *qt)
 {
 	struct list_head *pp;
 
@@ -1659,6 +1670,30 @@ static void generate_geom(struct quadtree *qt)
 				v->x = sv.x;
 				v->y = sv.y;
 				v->z = sv.z;
+
+				if (ANNOTATE) {
+					if (i == 0) { /* left - red*/
+						v->col[0] = 255;
+						v->col[1] = 0;
+						v->col[2] = 0;
+						v->col[3] = 0;
+					} else if (i == MESH_SAMPLES-1) { /* right - green */
+						v->col[0] = 0;
+						v->col[1] = 255;
+						v->col[2] = 0;
+						v->col[3] = 0;
+					} else if (j == MESH_SAMPLES-1) { /* top - cyan */
+						v->col[0] = 0;
+						v->col[1] = 255;
+						v->col[2] = 255;
+						v->col[3] = 0;
+					} else if (j == 0) { /* bottom - yellow */
+						v->col[0] = 255;
+						v->col[1] = 255;
+						v->col[2] = 0;
+						v->col[3] = 0;
+					}
+				}
 			}
 		}
 
