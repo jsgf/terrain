@@ -59,6 +59,15 @@ static inline int clamp(int x, int lower, int upper)
 	return x;
 }
 
+static int patch_flip(const vec3_t *face)
+{
+	float s = face->x + face->y + face->z;
+
+	assert(s == 1.f || s == -1.f);
+
+	return s == -1.f;
+}
+
 static void patch_sample_normal(const struct quadtree *qt, const struct patch *p,
 				int si, int sj, vec3_t *v)
 {
@@ -68,7 +77,7 @@ static void patch_sample_normal(const struct quadtree *qt, const struct patch *p
 	radius = qt->radius;
 	rv = *p->face;
 
-	if (rv.x + rv.y + rv.z < 0) {
+	if (patch_flip(p->face)) {
 		si = PATCH_SAMPLES - si;
 		//sj = PATCH_SAMPLES - sj;
 		vec3_abs(&rv);
@@ -614,14 +623,19 @@ static void patch_remove_freelist(struct quadtree *qt, struct patch *p)
 static void compute_bbox(const struct quadtree *qt, struct patch *p)
 {
 	vec3_t sph[5];
+	const float terrain_factor = qt->radius * 0.02f; /* 2% */
+
+	/* Model the patch as a pyramid, with the apex being the
+	   centre.  The base is lowered and the apex raised to make
+	   sure the bbox fits all the terrain.  */
 
 	patch_corner_normals(qt, p, sph);
 	patch_sample_normal(qt, p, PATCH_SAMPLES/2, PATCH_SAMPLES/2, &sph[4]);
 
 	for(int i = 0; i < 4; i++)
-		vec3_scale(&sph[i], qt->radius * .9);
+		vec3_scale(&sph[i], qt->radius - terrain_factor);
 
-	vec3_scale(&sph[4], qt->radius * 1.1);
+	vec3_scale(&sph[4], qt->radius + terrain_factor);
 
 	p->bbox.centre = VEC3(0,0,0);
 	for(int i = 0; i < sizeof(sph)/sizeof(*sph); i++)
@@ -1587,9 +1601,14 @@ static unsigned neighbour_class(const struct patch *p)
 	unsigned ud = 0;
 	unsigned lr = 0;
 
-	lr |= (p->neigh[PN_RIGHT]->level < p->level) << 0;
-	lr |= (p->neigh[PN_LEFT ]->level < p->level) << 1;
-
+	if (patch_flip(p->face)) {
+		/* patch_sample_normal() reverses the i-axis for -ve faces */
+		lr |= (p->neigh[PN_LEFT ]->level < p->level) << 0;
+		lr |= (p->neigh[PN_RIGHT]->level < p->level) << 1;
+	} else {
+		lr |= (p->neigh[PN_RIGHT]->level < p->level) << 0;
+		lr |= (p->neigh[PN_LEFT ]->level < p->level) << 1;
+	}
 	ud |= (p->neigh[PN_DOWN ]->level < p->level) << 0;
 	ud |= (p->neigh[PN_UP   ]->level < p->level) << 1;
 
