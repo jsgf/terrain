@@ -1710,36 +1710,57 @@ static void generate_geom(const struct quadtree *qt)
 		for(int j = 0; j < MESH_SAMPLES; j++) {
 			for(int i = 0; i < MESH_SAMPLES; i++) {
 				struct vertex *v = &samples[j * MESH_SAMPLES + i];
-				struct vertex *vi;
-				struct vertex *vj;
+				struct vertex *vn[4]; /* vertex neighbours */
 				struct vertex a, b;
 
-				if (i >= MESH_SAMPLES-1) {
-					vi = &a;
-					compute_vertex(qt, p, i+1, j, vi);
+				if (i == 0) {
+					vn[0] = &a;
+					compute_vertex(qt, p, i-1, j, vn[0]);
 				} else
-					vi = &samples[j * MESH_SAMPLES + (i + 1)];
+					vn[0] = &samples[j * MESH_SAMPLES + (i - 1)];
 
-				if (j >= MESH_SAMPLES-1) {
-					vj = &b;
-					compute_vertex(qt, p, i, j+1, vj);
+				if (i == MESH_SAMPLES-1) {
+					vn[2] = &a;
+					compute_vertex(qt, p, i+1, j, vn[2]);
 				} else
-					vj = &samples[(j + 1) * MESH_SAMPLES + i];
+					vn[2] = &samples[j * MESH_SAMPLES + (i + 1)];
 
-				vec3_t vecx = VEC3(vi->x - v->x,
-						   vi->y - v->y,
-						   vi->z - v->z);
-				vec3_t vecy = VEC3(vj->x - v->x,
-						   vj->y - v->y,
-						   vj->z - v->z);
-				vec3_t cross;
 
-				vec3_cross(&cross, &vecx, &vecy);
-				vec3_normalize(&cross);
+				if (j == 0) {
+					vn[1] = &b;
+					compute_vertex(qt, p, i, j-1, vn[1]);
+				} else
+					vn[1] = &samples[(j - 1) * MESH_SAMPLES + i];
 
-				v->nx = cross.x * 127;
-				v->ny = cross.y * 127;
-				v->nz = cross.z * 127;
+				if (j == MESH_SAMPLES-1) {
+					vn[3] = &b;
+					compute_vertex(qt, p, i, j+1, vn[3]);
+				} else
+					vn[3] = &samples[(j + 1) * MESH_SAMPLES + i];
+
+				vec3_t norm = VEC3(0,0,0);
+
+				for(unsigned x = 0; x < 3; x++) {
+					int nx = (x + 1) % 4;
+					vec3_t v1 = VEC3(vn[x]->x - v->x, 
+							 vn[x]->y - v->y, 
+							 vn[x]->z - v->z);
+					vec3_t v2 = VEC3(vn[nx]->x - v->x, 
+							 vn[nx]->y - v->y, 
+							 vn[nx]->z - v->z);
+					vec3_t cross;
+
+					vec3_cross(&cross, &v1, &v2);
+					vec3_normalize(&cross);
+
+					vec3_add(&norm, &norm, &cross);
+				}
+
+				vec3_scale(&norm, 1./4);
+
+				v->nx = norm.x * 127;
+				v->ny = norm.y * 127;
+				v->nz = norm.z * 127;
 			}
 		}
 
@@ -1827,6 +1848,27 @@ void quadtree_render(const struct quadtree *qt, void (*prerender)(const struct p
 		} else
 			glDrawArrays(GL_TRIANGLE_STRIP, p->vertex_offset, 
 				     VERTICES_PER_PATCH);
+
+		if (ANNOTATE && !have_vbo) {
+			struct vertex *va = &qt->varray[p->vertex_offset];
+
+			glPushAttrib(GL_ENABLE_BIT);
+			glDisable(GL_LIGHTING);
+			glDisable(GL_TEXTURE_2D);
+
+			glBegin(GL_LINES);
+			for(int i = 0; i < MESH_SAMPLES * MESH_SAMPLES; i++) {
+				struct vertex *v = &va[i];
+
+				glColor4ubv(v->col);
+				glVertex3fv(&v->x);
+				glVertex3f(v->x + v->nx, v->y + v->ny, v->z + v->nz);
+			}
+			glEnd();
+
+			glPopAttrib();
+		}
+
 		GLERROR();
 	}
 
