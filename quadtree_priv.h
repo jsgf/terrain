@@ -159,7 +159,9 @@ struct quadtree {
 	   generate elevation for a particular point on its
 	   surface. */
 	long radius;
-	elevation_t (*landscape)(const vec3_t *v, GLubyte col[4]);
+
+	/* Function which gives us altitude for a vector */
+	generator_t *generator;
 };
 
 #endif	/* _QUADTREE_PRIV_H */

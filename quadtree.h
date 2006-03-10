@@ -50,11 +50,16 @@
 
 struct quadtree;
 struct patch;
+struct vertex;
 
 typedef long elevation_t;	/* basic sample type of a heightfield */
+typedef elevation_t (generator_t)(const vec3_t *normal, struct vertex *vtx);
+
+typedef short texcoord_t;
 
 struct quadtree *quadtree_create(int num_patches, long radius,
-				 elevation_t (*generator)(const vec3_t *v, GLubyte colour[4]));
+				 generator_t *generator);
+
 void quadtree_update_view(struct quadtree *qt, const matrix_t *mat,
 			  const vec3_t *camerapos);
 void quadtree_render(const struct quadtree *qt, void (*prerender)(const struct patch *p));
@@ -62,5 +67,8 @@ void quadtree_render(const struct quadtree *qt, void (*prerender)(const struct p
 int patch_level(const struct patch *p);
 unsigned long patch_id(const struct patch *p);
 char *patch_name(const struct patch *p, char buf[16 * 2 + 1]);
+
+void vertex_set_colour(struct vertex *vtx, const unsigned char rgba[4]);
+void vertex_set_texcoord(struct vertex *vtx, texcoord_t s, texcoord_t t);
 
 #endif	/* QUADTREE_H */

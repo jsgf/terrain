@@ -40,8 +40,7 @@ do {									\
 } while(0)
 
 struct vertex {
-	//signed char s,t;		// PSP only
-	GLshort s,t;
+	texcoord_t s,t;
 	GLubyte col[4];
 	GLbyte nx, ny, nz;	/* needed? */
 	GLfloat x,y,z;		/* short? */
@@ -1067,8 +1066,7 @@ static int patch_split(struct quadtree *qt, struct patch *parent)
 	return 0;
 }
 
-struct quadtree *quadtree_create(int num_patches, long radius, 
-				 elevation_t (*generator)(const vec3_t *v, GLubyte col[4]))
+struct quadtree *quadtree_create(int num_patches, long radius, generator_t *generator)
 {
 	struct quadtree *qt = NULL;
 
@@ -1080,7 +1078,7 @@ struct quadtree *quadtree_create(int num_patches, long radius,
 	if (qt == NULL)
 		goto out;
 
-	qt->landscape = generator;
+	qt->generator = generator;
 	qt->radius = radius;
 
 	qt->patches = malloc(sizeof(struct patch) * num_patches);
@@ -1630,20 +1628,35 @@ void quadtree_update_view(struct quadtree *qt, const matrix_t *mat,
 }
 
 
+void vertex_set_colour(struct vertex *vtx, const unsigned char col[4])
+{
+	memcpy(vtx->col, col, sizeof(vtx->col));
+}
+
+void vertex_set_texcoord(struct vertex *vtx, texcoord_t s, texcoord_t t)
+{
+	vtx->s = s;
+	vtx->t = t;
+}
+
 static void compute_vertex(const struct quadtree *qt, const struct patch *p,
 			   int i, int j, struct vertex *vtx)
 {
 	vec3_t sv;
 	elevation_t elev;
 
-	patch_sample_normal(qt, p, i, j, &sv);
-
-	elev = (*qt->landscape)(&sv, vtx->col);
-
-	vec3_scale(&sv, qt->radius + elev);
-
 	vtx->s = i;
 	vtx->t = PATCH_SAMPLES - j;
+
+	vtx->col[0] = 255;
+	vtx->col[1] = 255;
+	vtx->col[2] = 255;
+	vtx->col[3] = 255;
+
+	patch_sample_normal(qt, p, i, j, &sv);
+
+	elev = (*qt->generator)(&sv, vtx);
+	vec3_scale(&sv, qt->radius + elev);
 
 	vtx->x = sv.x;
 	vtx->y = sv.y;

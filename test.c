@@ -556,7 +556,7 @@ static const GLubyte gradient[] = {
 	0xf4, 0xf5, 0xf4,
 };
 
-static elevation_t generate(const vec3_t *v, GLubyte col[4])
+static elevation_t generate(const vec3_t *v, struct vertex *vtx)
 {
 	float height;
 	elevation_t e;
@@ -588,10 +588,11 @@ static elevation_t generate(const vec3_t *v, GLubyte col[4])
 	if (idx > 255)
 		idx = 255;
 
-	col[0] = gradient[idx * 3 + 0];
-	col[1] = gradient[idx * 3 + 1];
-	col[2] = gradient[idx * 3 + 2];
-	col[3] = 0xff;
+	unsigned char col[] = { gradient[idx * 3 + 0],
+				gradient[idx * 3 + 1],
+				gradient[idx * 3 + 2],
+				0 };
+	vertex_set_colour(vtx, col);
 
 	return e;
 }
