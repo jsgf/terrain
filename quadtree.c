@@ -18,10 +18,10 @@
 #define DEBUG		0
 #define ANNOTATE	0
 
-#define TARGETSIZE (5.f / 100.)		/* target size as fraction of screen area */
+#define TARGETSIZE (2.f / 100.)		/* target size as fraction of screen area */
 static const float MARGIN  = TARGETSIZE;	/* size of error needed before updating */
 static const float MAXSIZE =  3*TARGETSIZE;	/* error threshold for splitting */
-static const float MINSIZE = -4*TARGETSIZE;	/* error threshold for merging */
+static const float MINSIZE = -3*TARGETSIZE;	/* error threshold for merging */
 
 
 static int have_vbo = -1;

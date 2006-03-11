@@ -15,6 +15,10 @@
 
 #define RADIUS (1<<20)
 
+#define LABELS 0
+
+GLuint buildtexture(float variance);
+
 static struct quadtree *qt;
 
 static float elevation, bearing;
@@ -23,6 +27,8 @@ static int update_view = 1;
 
 static struct fractal *frac;
 static float maxvariance, variance, offset;
+
+static GLuint texture;
 
 #define GLERROR()							\
 do {									\
@@ -95,6 +101,7 @@ void reshape (int w, int h)
 
 static void set_texture(const struct patch *p)
 {
+#if LABELS
 	GLuint texid = (patch_id(p)+1) + (1 << (patch_level(p) * 2 + 4));
 
 	if (!glIsTexture(texid)) {
@@ -114,6 +121,9 @@ static void set_texture(const struct patch *p)
 		texprintf("%s", s);
 	} else
 		glBindTexture(GL_TEXTURE_2D, texid);
+#else
+	glBindTexture(GL_TEXTURE_2D, texture);
+#endif
 }
 
 static float delta = 1;
@@ -130,7 +140,7 @@ static void display()
 	glMatrixMode(GL_MODELVIEW);
 	glLoadIdentity();
 
-	float centre = dolly < RADIUS*2 ? RADIUS*2 - dolly: 0;
+	float centre = dolly > RADIUS*(1+M_SQRT2) ? 0 : RADIUS*(1+M_SQRT2)-dolly;
 	gluLookAt(0,0,-dolly, 0,centre*1.1,0, 0,1,0);
 
 	glRotatef(elevation, 1, 0, 0);
@@ -167,8 +177,6 @@ static void display()
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	GLERROR();
-	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_BLEND);
-	GLERROR();
 
 	glColor3f(1,1,1);
 	glEnable(GL_CULL_FACE);
@@ -188,8 +196,23 @@ static void display()
 
 	glMatrixMode(GL_TEXTURE);
 	glLoadIdentity();
-	glScalef(1./PATCH_SAMPLES, 1./PATCH_SAMPLES, 1);
+
+	if (LABELS)
+		glScalef(1./PATCH_SAMPLES, 1./PATCH_SAMPLES, 1);
+	else {
+		glTranslatef(.4, 0, 0);
+		glScalef(1./32767, 1./32767, 1);
+	}
+
 	glMatrixMode(GL_MODELVIEW);
+
+	if (LABELS) {
+		glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_BLEND);
+		GLERROR();
+	} else {
+		glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+		GLERROR();
+	}
 
 	quadtree_render(qt, set_texture);
 
@@ -297,6 +320,7 @@ static void mouse(int buttons, int state, int x, int y)
 	glutPostRedisplay();
 }
 
+#if LABELS
 static const GLubyte gradient[] = {
 	0x06, 0x1d, 0x98,
 	0x07, 0x1e, 0x99,
@@ -560,17 +584,7 @@ static elevation_t generate(const vec3_t *v, struct vertex *vtx)
 {
 	float height;
 	elevation_t e;
-
-	//printf("x=%ld y=%ld z=%ld\n", x, y, z);
-
 	int idx;
-#if 0
-	height = (cos(v->x * M_PI * 2 / RADIUS) + 
-		  sin(v->y * M_PI * 2 / (RADIUS*2)) +
-		  sin(v->z * M_PI * 2 / (RADIUS*.5))*1.1);
-	idx = (height / 3) * 255 + 150;
-	e = height * (RADIUS * .02);
-#else
 	vec3_t nv = *v;
 
 	vec3_normalize(&nv);
@@ -581,7 +595,6 @@ static elevation_t generate(const vec3_t *v, struct vertex *vtx)
 	idx = ((height * .5f) + .5f) * 255;
 
 	e = height * variance + offset;
-#endif
 
 	if (idx < 0)
 		idx = 0;
@@ -596,10 +609,36 @@ static elevation_t generate(const vec3_t *v, struct vertex *vtx)
 
 	return e;
 }
+#else
+static elevation_t generate(const vec3_t *v, struct vertex *vtx)
+{
+	float height;
+	elevation_t e;
+	vec3_t nv = *v;
+
+	vec3_normalize(&nv);
+
+	height = fractal_fBmtest(frac, nv.v, 6);
+
+	//printf("height(%g, %g, %g) = %g, variance=%g\n", v[0], v[1], v[2], height, variance);
+	e = height * variance + offset;
+
+	texcoord_t s = e * 16384 / maxvariance;
+	texcoord_t t = (fabsf(v->z) + .1f * fractal_fBm(frac, v->v, 4)) * 32767;
+
+	if (0)
+		printf("set texcoord(%g,%g,%g) = st=(%d,%d), maxvariance=%g\n",
+		       v->x, v->y, v->z, s, t, maxvariance);
+
+	vertex_set_texcoord(vtx, s, t);
+
+	return e;
+}
+#endif	/* LABELS */
 
 int main(int argc, char **argv)
 {
-	float _variance = RADIUS * .01;
+	float _variance = RADIUS * .03;
 	float _roughness = .5;
 
 	frac = fractal_create(3, 123, 1.0 - _roughness, 2.25);
@@ -616,7 +655,7 @@ int main(int argc, char **argv)
         glutInitWindowSize(480*2, 272*2);
 	glutCreateWindow( __FILE__ );
 
-	qt = quadtree_create(250, RADIUS, generate);
+	qt = quadtree_create(500, RADIUS, generate);
 	
 	//glutSpecialFunc(special_down);
 	glutKeyboardFunc(keydown);
@@ -643,6 +682,14 @@ int main(int argc, char **argv)
 		glLightfv(GL_LIGHT1, GL_DIFFUSE, diffcol1);
 		glLightfv(GL_LIGHT1, GL_POSITION, lightdir1);
 	}
+	GLERROR();
+
+	texture = buildtexture(variance);
+	GLERROR();
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
 	glutMainLoop();
 }
