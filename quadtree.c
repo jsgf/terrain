@@ -18,7 +18,7 @@
 #define DEBUG		0
 #define ANNOTATE	0
 
-#define TARGETSIZE (2.f / 100.)		/* target size as fraction of screen area */
+#define TARGETSIZE (.5f / 100.)		/* target size as fraction of screen area */
 static const float MARGIN  = TARGETSIZE;	/* size of error needed before updating */
 static const float MAXSIZE =  3*TARGETSIZE;	/* error threshold for splitting */
 static const float MINSIZE = -3*TARGETSIZE;	/* error threshold for merging */
@@ -656,7 +656,7 @@ static void patch_remove_freelist(struct quadtree *qt, struct patch *p)
 static void compute_bbox(const struct quadtree *qt, struct patch *p)
 {
 	vec3_t sph[5];
-	const float terrain_factor = qt->radius * 0.02f; /* 2% */
+	const float terrain_factor = qt->radius * .05f; /* 5% */
 
 	/* Model the patch as a pyramid, with the apex being the
 	   centre.  The base is lowered and the apex raised to make
