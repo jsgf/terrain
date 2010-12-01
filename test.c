@@ -618,7 +618,7 @@ static elevation_t generate(const vec3_t *v, struct vertex *vtx)
 
 	vec3_normalize(&nv);
 
-	height = fractal_fBmtest(frac, nv.v, 6);
+	height = fractal_fBmtest(frac, nv.v, 8);
 
 	//printf("height(%g, %g, %g) = %g, variance=%g\n", v[0], v[1], v[2], height, variance);
 	e = height * variance + offset;
@@ -639,9 +639,9 @@ static elevation_t generate(const vec3_t *v, struct vertex *vtx)
 int main(int argc, char **argv)
 {
 	float _variance = RADIUS * .03;
-	float _roughness = .5;
+	float _roughness = .3;
 
-	frac = fractal_create(3, 123, 1.0 - _roughness, 2.25);
+	frac = fractal_create(3, 210, 1.0 - _roughness, 5);
 	
 	maxvariance = _variance;
 	variance = maxvariance / .75f;
