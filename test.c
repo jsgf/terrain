@@ -284,7 +284,7 @@ static void keyup(unsigned char key, int x, int y)
 }
 
 static int drag = 0, spin = 0;
-static int lasty = 0;
+static int lastx = 0, lasty = 0;
 
 static void motion(int x, int y)
 {
@@ -294,11 +294,13 @@ static void motion(int x, int y)
 			dolly = RADIUS * 1.01;
 
 		//printf("dolly = %g\n", dolly);
-		lasty = y;
 	} else if (spin) {
-		elevation = y * 360 / height;
-		bearing = x * 360 / width;
+		elevation += (y - lasty) * 360 / height;
+		bearing += (x - lastx) * 360 / width;
 	}
+
+	lastx = x;
+	lasty = y;
 
 	glutPostRedisplay();
 }
@@ -310,11 +312,17 @@ static void mouse(int buttons, int state, int x, int y)
 		return;
 	}
 
-	if (buttons == GLUT_LEFT_BUTTON)
+	lastx = x;
+	lasty = y;
+
+	switch (buttons) {
+	case GLUT_LEFT_BUTTON:
 		spin = 1;
-	else if (buttons == GLUT_MIDDLE_BUTTON) {
-		lasty = y;
+		break;
+
+	case GLUT_MIDDLE_BUTTON:
 		drag = 1;
+		break;
 	}
 
 	glutPostRedisplay();
