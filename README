@@ -1,0 +1,14 @@
+Terrain Engine Experiment
+
+This is some old experiments in a terrain engine for a globe.  The code
+is definitely experimental and not suitable for any particular purpose.
+
+The main idea is to make an engine which does LOD on patches, where
+the patch structure is fixed which allows for efficient submission to
+hardware (whereas per-triangle LOD algorithms are hard to make efficient
+for hardware).
+
+The other thing is that the number of patches is fixed - they're reused
+and recycled as needed, but there should be no allocator overhead.
+I don't know how useful this is in practice (it needs a proper priority
+queue rather than a sorted list to make this significant, I think).
