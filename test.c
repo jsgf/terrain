@@ -660,7 +660,7 @@ static elevation_t generate(const vec3_t *v, struct vertex *vtx)
 int main(int argc, char **argv)
 {
 	float _variance = RADIUS * .03;
-	float _roughness = .3;
+	float _roughness = .1;
 
 	frac = fractal_create(3, 210, 1.0 - _roughness, 5);
 	
