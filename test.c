@@ -25,6 +25,8 @@ static float elevation, bearing;
 static int wireframe = 0;
 static int update_view = 1;
 
+static int animate = 0;
+
 static struct fractal *frac;
 static float maxvariance, variance, offset;
 
@@ -241,8 +243,9 @@ static void display()
 
 	glViewport(0,0,width/3, height/3);
 	glScissor(0,0,width/3,height/3);
+
 	glClearColor(.3,.3,.3,1);
-	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	glClear(/* GL_COLOR_BUFFER_BIT | */ GL_DEPTH_BUFFER_BIT);
 
 	glDisable(GL_CULL_FACE);
 
@@ -251,9 +254,6 @@ static void display()
 	glPopAttrib();
 
 	glutSwapBuffers();
-
-	//usleep(10000);
-	//glutPostRedisplay();
 }
 
 static void move_dolly(float delta);
@@ -294,6 +294,16 @@ static void specialdown(int key, int x, int y)
 	glutPostRedisplay();
 }
 
+static void animation(int x)
+{
+	bearing += 1;
+
+	glutPostRedisplay();
+
+	if (animate)
+		glutTimerFunc(1000 / 30, animation, 0);
+}
+
 static void keydown(unsigned char key, int x, int y)
 {
 	switch(key) {
@@ -303,6 +313,12 @@ static void keydown(unsigned char key, int x, int y)
 
 	case 'd':
 		wireframe = !wireframe;
+		break;
+
+	case 'a':
+		animate = !animate;
+		if (animate)
+			glutTimerFunc(1000 / 30, animation, 0);
 		break;
 
 	case 'x':
