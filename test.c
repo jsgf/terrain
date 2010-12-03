@@ -256,6 +256,44 @@ static void display()
 	//glutPostRedisplay();
 }
 
+static void move_dolly(float delta);
+
+static void specialdown(int key, int x, int y)
+{
+	float delta = 2;
+
+	switch (key) {
+	case GLUT_KEY_LEFT:
+		bearing += delta;
+		break;
+
+	case GLUT_KEY_RIGHT:
+		bearing -= delta;
+		break;
+
+	case GLUT_KEY_UP:
+		elevation -= delta;
+		break;
+
+	case GLUT_KEY_DOWN:
+		elevation += delta;
+		break;
+
+	case GLUT_KEY_PAGE_UP:
+		move_dolly(-10);
+		break;
+
+	case GLUT_KEY_PAGE_DOWN:
+		move_dolly(10);
+		break;
+
+	default:
+		return;
+	}
+
+	glutPostRedisplay();
+}
+
 static void keydown(unsigned char key, int x, int y)
 {
 	switch(key) {
@@ -306,11 +344,6 @@ static void spin_start(int x, int y)
 
 	base_elevation = elevation;
 	base_bearing = bearing;
-}
-
-static void spin_stop(void)
-{
-	spin = 0;
 }
 
 static void motion(int x, int y)
@@ -692,7 +725,7 @@ int main(int argc, char **argv)
 
 	qt = quadtree_create(500, RADIUS, generate);
 	
-	//glutSpecialFunc(special_down);
+	glutSpecialFunc(specialdown);
 	glutKeyboardFunc(keydown);
 	glutKeyboardUpFunc(keyup);
 	glutReshapeFunc(reshape);
