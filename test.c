@@ -15,7 +15,7 @@
 
 #define RADIUS (1<<20)
 
-#define LABELS 0
+#define LABELS 1
 
 GLuint buildtexture(float variance);
 
