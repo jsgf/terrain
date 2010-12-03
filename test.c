@@ -295,17 +295,33 @@ static void move_dolly(float delta)
 	//printf("dolly = %g\n", dolly);
 }
 
+static float base_elevation, base_bearing;
+
+static void spin_start(int x, int y)
+{
+	spin = 1;
+
+	lastx = x;
+	lasty = y;
+
+	base_elevation = elevation;
+	base_bearing = bearing;
+}
+
+static void spin_stop(void)
+{
+	spin = 0;
+}
+
 static void motion(int x, int y)
 {
 	if (drag) {
 		move_dolly(y - lasty);
+		lasty = y;
 	} else if (spin) {
-		elevation += (y - lasty) * 360 / height;
-		bearing += (x - lastx) * 360 / width;
+		elevation = base_elevation + (y - lasty) * 360 / height;
+		bearing = base_bearing + (x - lastx) * 360 / width;
 	}
-
-	lastx = x;
-	lasty = y;
 
 	glutPostRedisplay();
 }
@@ -317,9 +333,6 @@ static void mouse(int buttons, int state, int x, int y)
 		return;
 	}
 
-	lastx = x;
-	lasty = y;
-
 	switch (buttons) {
 	case 4:
 		move_dolly(20);
@@ -330,11 +343,12 @@ static void mouse(int buttons, int state, int x, int y)
 		break;
 
 	case GLUT_LEFT_BUTTON:
-		spin = 1;
+		spin_start(x, y);
 		break;
 
 	case GLUT_MIDDLE_BUTTON:
 		drag = 1;
+		lasty = y;
 		break;
 	}
 
