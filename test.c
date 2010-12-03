@@ -286,14 +286,19 @@ static void keyup(unsigned char key, int x, int y)
 static int drag = 0, spin = 0;
 static int lastx = 0, lasty = 0;
 
+static void move_dolly(float delta)
+{
+	dolly += delta * RADIUS/1024;
+	if (dolly < RADIUS * 1.01)
+		dolly = RADIUS * 1.05;
+
+	//printf("dolly = %g\n", dolly);
+}
+
 static void motion(int x, int y)
 {
 	if (drag) {
-		dolly += (y - lasty) * RADIUS/1024;
-		if (dolly < RADIUS * 1.01)
-			dolly = RADIUS * 1.01;
-
-		//printf("dolly = %g\n", dolly);
+		move_dolly(y - lasty);
 	} else if (spin) {
 		elevation += (y - lasty) * 360 / height;
 		bearing += (x - lastx) * 360 / width;
@@ -316,6 +321,14 @@ static void mouse(int buttons, int state, int x, int y)
 	lasty = y;
 
 	switch (buttons) {
+	case 4:
+		move_dolly(20);
+		break;
+
+	case 3:
+		move_dolly(-20);
+		break;
+
 	case GLUT_LEFT_BUTTON:
 		spin = 1;
 		break;
